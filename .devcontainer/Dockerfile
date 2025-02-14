@@ -32,6 +32,8 @@ RUN apt-get update && apt-get install -y \
     python3-tk \
     libglfw3-dev \
     kbd \
+    libeigen3-dev \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure locale
@@ -106,7 +108,59 @@ RUN git clone https://github.com/Atarilab/mj_pin_utils.git && \
     bash -c "source /home/$USERNAME/miniconda/etc/profile.d/conda.sh && conda activate atari_mpc && \
     conda develop ./mj_pin_utils"
 
+# Install ROS 2 (Humble)
+ENV ROS_DISTRO=humble
+
+# Install ROS 2 dependencies
+RUN sudo apt-get update && sudo apt-get install -y \
+    curl \
+    gnupg2 \
+    lsb-release \
+    && sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null \
+    && sudo apt-get update && sudo apt-get install -y \
+    ros-$ROS_DISTRO-desktop \
+    ros-$ROS_DISTRO-ament-cmake \
+    python3-argcomplete \
+    python3-colcon-common-extensions \
+    python3-rosdep \
+    python3-colcon-mixin \
+    python3-vcstool \
+    ros-$ROS_DISTRO-gazebo-ros-pkgs \
+    ros-$ROS_DISTRO-xacro \
+    ros-$ROS_DISTRO-rmw-cyclonedds-cpp \
+    ros-$ROS_DISTRO-rosidl-generator-dds-idl \
+    ros-$ROS_DISTRO-joint-state-publisher-gui \
+    ros-$ROS_DISTRO-plotjuggler-ros \
+    && sudo rosdep init \
+    && rosdep update
+
+# Clone and install unitree_ros2
+RUN git clone https://github.com/unitreerobotics/unitree_ros2
+
+# Install CycloneDDS
+WORKDIR /home/$USERNAME/unitree_ros2/cyclonedds_ws/src
+RUN git clone https://github.com/ros2/rmw_cyclonedds -b $ROS_DISTRO && \
+    git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x
+WORKDIR /home/$USERNAME/unitree_ros2/cyclonedds_ws/
+RUN bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && colcon build --packages-select cyclonedds"
+
+# Install unitree_sdk2_python
+RUN git clone https://github.com/unitreerobotics/unitree_sdk2_python.git && \
+    cd unitree_sdk2_python && \
+    conda develop .
+
+# Install unitree_mujoco
+RUN git clone https://github.com/unitreerobotics/unitree_mujoco.git
+
+# Install code formatters and linters
+RUN conda install black flake8 isort pre-commit
+
 # Set the final working directory
 WORKDIR /home/$USERNAME/workspace/
+
+# Source ROS 2 Environments
+RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /home/$USERNAME/.bashrc 
+
 
 CMD ["bash"]
