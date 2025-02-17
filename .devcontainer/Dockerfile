@@ -155,6 +155,7 @@ RUN git clone https://github.com/unitreerobotics/unitree_mujoco.git
 
 # Install code formatters and linters
 RUN conda install black flake8 isort pre-commit
+RUN conda install -c conda-forge catkin_pkg empy lark
 
 # Set the final working directory
 WORKDIR /home/$USERNAME/workspace/
