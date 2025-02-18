@@ -66,48 +66,6 @@ RUN sudo chown -R $USERNAME:$USERNAME /home/$USERNAME/
 RUN mkdir -p /home/$USERNAME/workspace/
 WORKDIR /home/$USERNAME/workspace/
 
-# Install Miniconda
-RUN curl -fsSL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o Miniconda3.sh && \
-    bash Miniconda3.sh -b -p /home/$USERNAME/miniconda && \
-    rm Miniconda3.sh
-ENV PATH="/home/$USERNAME/miniconda/bin:$PATH"
-
-# Initialize conda for bash
-RUN /home/$USERNAME/miniconda/bin/conda init bash
-
-# Create and activate the Conda environment
-COPY ./environment.yml .
-
-# Add conda-forge channel
-RUN /home/$USERNAME/miniconda/bin/conda config --add channels conda-forge
-RUN /home/$USERNAME/miniconda/bin/conda install conda-build
-RUN bash -c "source /home/$USERNAME/miniconda/etc/profile.d/conda.sh && \
-    conda env create -n atari_mpc -f environment.yml python=3.12"
-RUN rm environment.yml
-
-# Ensure the environment is always activated
-RUN echo "source /home/$USERNAME/miniconda/etc/profile.d/conda.sh && conda activate atari_mpc" >> ~/.bashrc
-
-# Set the working directory
-WORKDIR /home/$USERNAME/
-
-# Clone and install acados with Python interface
-RUN git clone https://github.com/acados/acados.git && \
-    cd acados && \
-    git submodule update --recursive --init && \
-    mkdir -p build && cd build && \
-    cmake -DACADOS_WITH_QPOASES=ON .. && \
-    make install -j$(nproc) && \
-    bash -c "source /home/$USERNAME/miniconda/etc/profile.d/conda.sh && conda activate atari_mpc && \
-    conda develop ../interfaces/acados_template"
-ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/home/$USERNAME/acados/lib"
-ENV ACADOS_SOURCE_DIR="/home/$USERNAME/acados"
-
-# Clone and install mj_pin_utils
-RUN git clone https://github.com/Atarilab/mj_pin_utils.git && \
-    bash -c "source /home/$USERNAME/miniconda/etc/profile.d/conda.sh && conda activate atari_mpc && \
-    conda develop ./mj_pin_utils"
-
 # Install ROS 2 (Humble)
 ENV ROS_DISTRO=humble
 
@@ -135,6 +93,9 @@ RUN sudo apt-get update && sudo apt-get install -y \
     && sudo rosdep init \
     && rosdep update
 
+# Set the working directory
+WORKDIR /home/$USERNAME/
+
 # Clone and install unitree_ros2
 RUN git clone https://github.com/unitreerobotics/unitree_ros2
 
@@ -143,25 +104,104 @@ WORKDIR /home/$USERNAME/unitree_ros2/cyclonedds_ws/src
 RUN git clone https://github.com/ros2/rmw_cyclonedds -b $ROS_DISTRO && \
     git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x
 WORKDIR /home/$USERNAME/unitree_ros2/cyclonedds_ws/
-RUN bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && colcon build --packages-select cyclonedds"
+RUN bash -c "source /opt/ros/$ROS_DISTRO/setup.bash &&\
+             colcon build --packages-select cyclonedds"
+
+WORKDIR /home/$USERNAME/
 
 # Install unitree_sdk2_python
 RUN git clone https://github.com/unitreerobotics/unitree_sdk2_python.git && \
     cd unitree_sdk2_python && \
-    conda develop .
+    # conda develop .
+    pip install .
 
 # Install unitree_mujoco
 RUN git clone https://github.com/unitreerobotics/unitree_mujoco.git
 
-# Install code formatters and linters
-RUN conda install black flake8 isort pre-commit
-RUN conda install -c conda-forge catkin_pkg empy lark
+# Install pinocchio from robotpkg repository
+RUN echo "deb [arch=amd64] http://robotpkg.openrobots.org/packages/debian/pub $(lsb_release -cs) robotpkg" | sudo tee /etc/apt/sources.list.d/robotpkg.list && \
+    sudo curl http://robotpkg.openrobots.org/packages/debian/robotpkg.key | sudo apt-key add -
+
+# Update package list and install robotpkg-py310-pinocchio
+RUN sudo apt-get update -y && \
+    sudo apt-get install -qqy robotpkg-py310-pinocchio
+
+# Set environment variables
+ENV PATH=/opt/openrobots/bin:$PATH
+ENV PKG_CONFIG_PATH=/opt/openrobots/lib/pkgconfig:$PKG_CONFIG_PATH
+ENV LD_LIBRARY_PATH=/opt/openrobots/lib:$LD_LIBRARY_PATH
+ENV PYTHONPATH=/opt/openrobots/lib/python3.10/site-packages:$PYTHONPATH
+ENV CMAKE_PREFIX_PATH=/opt/openrobots:$CMAKE_PREFIX_PATH
+
+# Create fake dist-info for pip to recognise the package
+ENV PIN_VERSION=3.3.1
+RUN sudo mkdir -p /opt/openrobots/lib/python3.10/site-packages/pin-${PIN_VERSION}.dist-info && \
+    sudo chmod -R a+w /opt/openrobots/lib/python3.10/site-packages/pin-${PIN_VERSION}.dist-info && \
+    sudo bash -c 'echo "Metadata-Version: 2.1\
+    Name: pin\
+    Version: '${PIN_VERSION}'\
+    Summary: Installed via robotpkg\
+    " > /opt/openrobots/lib/python3.10/site-packages/pin-'${PIN_VERSION}'.dist-info/METADATA'
+
+# Same for casadi
+ENV CASADI_VERSION=3.6.7
+RUN sudo mkdir -p /opt/openrobots/lib/python3.10/site-packages/casadi-${CASADI_VERSION}.dist-info && \
+    sudo chmod -R a+w /opt/openrobots/lib/python3.10/site-packages/casadi-${CASADI_VERSION}.dist-info && \
+    sudo bash -c 'echo "Metadata-Version: 0.1\
+    Name: casadi\
+    Version: '${CASADI_VERSION}'\
+    Summary: Installed via robotpkg\
+    " > /opt/openrobots/lib/python3.10/site-packages/casadi-'${CASADI_VERSION}'.dist-info/METADATA'
+
+# (Optional) Source .bashrc if needed for subsequent commandsp
+RUN echo "source ~/.bashrc" >> ~/.bash_profile
+
+# Create a virtual environment
+RUN sudo apt install -y python3.10-venv
+RUN python3 -m venv /home/$USERNAME/workspace/.venv
+
+# Activate the virtual environment and install packages
+RUN /bin/bash -c "source /home/$USERNAME/workspace/.venv/bin/activate && \
+    pip install --upgrade \
+    pip \
+    numpy==1.21.5 \
+    typeguard==4.4.2 \
+    scipy==1.8 \
+    matplotlib==3.8 \
+    colcon-core==0.18.4 \
+    colcon-common-extensions==0.3.0 \
+    lark==1.2.2 \
+    catkin-pkg==1.0.0 \
+    empy==3.3.4 \
+    mujoco==3.2.7 \
+    opencv-python==4.11.0.86 \
+    "
+
+# Clone and install acados with Python interface
+RUN git clone https://github.com/acados/acados.git && \
+    cd acados && \
+    git submodule update --recursive --init && \
+    mkdir -p build && cd build && \
+    cmake -DACADOS_WITH_QPOASES=ON .. && \
+    make install -j$(nproc) && \
+    /bin/bash -c "source /home/$USERNAME/workspace/.venv/bin/activate && \
+    pip install ../interfaces/acados_template"
+
+ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/home/$USERNAME/acados/lib"
+ENV ACADOS_SOURCE_DIR="/home/$USERNAME/acados"
+
+# Clone and install mj_pin_utils
+RUN git clone https://github.com/Atarilab/mj_pin_utils.git && \
+    /bin/bash -c "source /home/$USERNAME/workspace/.venv/bin/activate && \
+    pip install -e ./mj_pin_utils"
 
 # Set the final working directory
 WORKDIR /home/$USERNAME/workspace/
 
+# Source the virtual environment
+RUN echo "source /home/$USERNAME/workspace/.venv/bin/activate" >> /home/$USERNAME/.bashrc
 # Source ROS 2 Environments
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /home/$USERNAME/.bashrc 
-
+# RUN echo "source /home/$USERNAME/ros2-controller/install/setup.bash" >> /home/$USERNAME/.bashrc 
 
 CMD ["bash"]
