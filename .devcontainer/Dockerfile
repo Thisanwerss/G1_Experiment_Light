@@ -165,9 +165,12 @@ WORKDIR /home/$USERNAME/unitree_ros2/cyclonedds_ws/src
 RUN git clone https://github.com/ros2/rmw_cyclonedds -b $ROS_DISTRO && \
     git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x
 WORKDIR /home/$USERNAME/unitree_ros2/cyclonedds_ws/
+RUN bash -c "source /home/$USERNAME/.venv/bin/activate && \
+             colcon build --packages-select cyclonedds"
 RUN bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && \
              source /home/$USERNAME/.venv/bin/activate && \
-             colcon build --packages-select cyclonedds"
+             colcon build"
+RUN echo "source /home/unitree_ros2/cyclonedds_ws/install/setup.bash" >> /home/$USERNAME/.bashrc
 
 WORKDIR /home/$USERNAME
 
