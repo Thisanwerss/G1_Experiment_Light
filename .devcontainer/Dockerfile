@@ -96,28 +96,6 @@ RUN sudo apt-get update && sudo apt-get install -y \
 # Set the working directory
 WORKDIR /home/$USERNAME/
 
-# Clone and install unitree_ros2
-RUN git clone https://github.com/unitreerobotics/unitree_ros2
-
-# Install CycloneDDS
-WORKDIR /home/$USERNAME/unitree_ros2/cyclonedds_ws/src
-RUN git clone https://github.com/ros2/rmw_cyclonedds -b $ROS_DISTRO && \
-    git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x
-WORKDIR /home/$USERNAME/unitree_ros2/cyclonedds_ws/
-RUN bash -c "source /opt/ros/$ROS_DISTRO/setup.bash &&\
-             colcon build --packages-select cyclonedds"
-
-WORKDIR /home/$USERNAME/
-
-# Install unitree_sdk2_python
-RUN git clone https://github.com/unitreerobotics/unitree_sdk2_python.git && \
-    cd unitree_sdk2_python && \
-    # conda develop .
-    pip install .
-
-# Install unitree_mujoco
-RUN git clone https://github.com/unitreerobotics/unitree_mujoco.git
-
 # Install pinocchio from robotpkg repository
 RUN echo "deb [arch=amd64] http://robotpkg.openrobots.org/packages/debian/pub $(lsb_release -cs) robotpkg" | sudo tee /etc/apt/sources.list.d/robotpkg.list && \
     sudo curl http://robotpkg.openrobots.org/packages/debian/robotpkg.key | sudo apt-key add -
@@ -158,13 +136,14 @@ RUN echo "source ~/.bashrc" >> ~/.bash_profile
 
 # Create a virtual environment
 RUN sudo apt install -y python3.10-venv
-RUN python3 -m venv /home/$USERNAME/workspace/.venv
+RUN python3 -m venv /home/$USERNAME/.venv
+RUN /bin/bash -c "source /home/$USERNAME/.venv/bin/activate && \
+     pip install --upgrade pip"
 
 # Activate the virtual environment and install packages
-RUN /bin/bash -c "source /home/$USERNAME/workspace/.venv/bin/activate && \
+RUN /bin/bash -c "source /home/$USERNAME/.venv/bin/activate && \
     pip install --upgrade \
-    pip \
-    numpy==1.21.5 \
+    numpy==1.24 \
     typeguard==4.4.2 \
     scipy==1.8 \
     matplotlib==3.8 \
@@ -175,16 +154,40 @@ RUN /bin/bash -c "source /home/$USERNAME/workspace/.venv/bin/activate && \
     empy==3.3.4 \
     mujoco==3.2.7 \
     opencv-python==4.11.0.86 \
+    pygame==2.6.1 \
+    tqdm==4.67.1 \
+    robot_descriptions==1.14 \
     "
+
+# Clone and install unitree_ros2 + CycloneDDS
+RUN git clone https://github.com/unitreerobotics/unitree_ros2
+WORKDIR /home/$USERNAME/unitree_ros2/cyclonedds_ws/src
+RUN git clone https://github.com/ros2/rmw_cyclonedds -b $ROS_DISTRO && \
+    git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x
+WORKDIR /home/$USERNAME/unitree_ros2/cyclonedds_ws/
+RUN bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && \
+             source /home/$USERNAME/.venv/bin/activate && \
+             colcon build --packages-select cyclonedds"
+
+WORKDIR /home/$USERNAME
+
+# Install unitree_sdk2_python
+RUN git clone https://github.com/unitreerobotics/unitree_sdk2_python.git && \
+    cd unitree_sdk2_python && \
+    /bin/bash -c "source /home/$USERNAME/.venv/bin/activate && \
+                  pip install -e ."
+
+# Install unitree_mujoco
+RUN git clone https://github.com/unitreerobotics/unitree_mujoco.git
 
 # Clone and install acados with Python interface
 RUN git clone https://github.com/acados/acados.git && \
     cd acados && \
     git submodule update --recursive --init && \
     mkdir -p build && cd build && \
-    cmake -DACADOS_WITH_QPOASES=ON .. && \
+    cmake -DACADOS_WITH_QPOASES=ON -DACADOS_WITH_OPENMP=ON -DACADOS_NUM_THREADS=1 .. && \
     make install -j$(nproc) && \
-    /bin/bash -c "source /home/$USERNAME/workspace/.venv/bin/activate && \
+    /bin/bash -c "source /home/$USERNAME/.venv/bin/activate && \
     pip install ../interfaces/acados_template"
 
 ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/home/$USERNAME/acados/lib"
@@ -192,14 +195,14 @@ ENV ACADOS_SOURCE_DIR="/home/$USERNAME/acados"
 
 # Clone and install mj_pin_utils
 RUN git clone https://github.com/Atarilab/mj_pin_utils.git && \
-    /bin/bash -c "source /home/$USERNAME/workspace/.venv/bin/activate && \
+    /bin/bash -c "source /home/$USERNAME/.venv/bin/activate && \
     pip install -e ./mj_pin_utils"
 
 # Set the final working directory
 WORKDIR /home/$USERNAME/workspace/
 
 # Source the virtual environment
-RUN echo "source /home/$USERNAME/workspace/.venv/bin/activate" >> /home/$USERNAME/.bashrc
+RUN echo "source /home/$USERNAME/.venv/bin/activate" >> /home/$USERNAME/.bashrc
 # Source ROS 2 Environments
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /home/$USERNAME/.bashrc 
 # RUN echo "source /home/$USERNAME/ros2-controller/install/setup.bash" >> /home/$USERNAME/.bashrc 
