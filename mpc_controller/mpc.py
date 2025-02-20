@@ -546,25 +546,25 @@ class LocomotionMPC(PinController):
         """
         Compute torques based on robot state in the MuJoCo simulation.
         """
-        time = round(sim_time - self.t0, 4)
+        t = round(sim_time - self.t0, 4)
 
         if not self.first_solve:
             # Increment the optimization node every dt_nodes
             # TODO: This may be changed in case of dt time optimization
             # One may update the opt node according to the last dt results
-            if time >= (self.current_opt_node+1) * self.dt_nodes:
+            if t >= (self.current_opt_node+1) * self.dt_nodes:
                 self.current_opt_node += 1
         
         # Start a new optimization asynchronously if it's time to replan
         if self._replan():
 
             # Compute replanning time
-            self.start_time = time
+            self.start_time = t
             # Set solver parameters on first iteration
             self.set_convergence_on_first_iter()
 
             # Set up asynchronous optimize call
-            self.time_start_plan = time
+            self.time_start_plan = t
             self.optimize_future = self.executor.submit(self.optimize, q_mj, v_mj)
             self.plan_submitted = True
 
@@ -572,13 +572,13 @@ class LocomotionMPC(PinController):
                 print()
                 print("#"*10, "Replan", "#"*10)
                 print("Current node:", self.current_opt_node,
-                      "Sim time:", time,
+                      "Sim time:", t,
                       "Sim step:", self.sim_step)
                 print()
 
             # Wait for the solver if no delay
             while not self.solve_async and not self.optimize_future.done():
-                time.sleep(5.0e-4)
+                t.sleep(5.0e-4)
 
         # Check if the future is done and if the new plan is ready to be used
         if (self.plan_submitted and self.optimize_future.done()):
@@ -595,7 +595,7 @@ class LocomotionMPC(PinController):
 
                 # Apply delay, not for first iteration
                 if (self.solve_async and not self.first_solve):
-                    replanning_time = time - self.start_time
+                    replanning_time = t - self.start_time
                     self.delay = math.ceil(replanning_time / self.sim_dt)
                 else:
                     self.delay = 0
