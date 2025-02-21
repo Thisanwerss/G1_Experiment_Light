@@ -170,7 +170,7 @@ RUN bash -c "source /home/$USERNAME/.venv/bin/activate && \
 RUN bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && \
              source /home/$USERNAME/.venv/bin/activate && \
              colcon build"
-RUN echo "source /home/unitree_ros2/cyclonedds_ws/install/setup.bash" >> /home/$USERNAME/.bashrc
+RUN echo "source /home/$USERNAME/unitree_ros2/cyclonedds_ws/install/setup.sh" >> /home/$USERNAME/.bashrc
 
 WORKDIR /home/$USERNAME
 
