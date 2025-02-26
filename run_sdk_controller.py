@@ -1,0 +1,103 @@
+import time
+import sys
+import numpy as np
+import mujoco
+from mpc_controller.mpc import LocomotionMPC
+from sdk_controller.abstract import SDKController
+from mj_pin.utils import get_robot_description, mj_joint_name2act_id, mj_joint_name2dof
+
+from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
+from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_
+from unitree_sdk2py.idl.default import unitree_go_msg_dds__SportModeState_
+from unitree_sdk2py.idl.default import unitree_go_msg_dds__WirelessController_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
+from unitree_sdk2py.utils.crc import CRC
+
+class MPC_SDK(SDKController):
+    def __init__(self,
+                 mpc,
+                 robot_config,
+                 xml_path = "",
+                 v_max=0.5,
+                 w_max=0.5):
+        self.mpc = mpc
+        self.v_max = v_max
+        self.w_max = w_max
+        self.v_des = np.zeros(3)
+        self.w_des = 0.
+        super().__init__(robot_config, xml_path)
+
+    def wireless_handler(self, msg : WirelessController_):
+        super().wireless_handler(msg)
+        self.mpc.set_command(
+            v_des = np.round([msg.ly * self.v_max, -msg.lx * self.v_max, 0.], 2),
+            w_yaw = -round(msg.rx * self.w_max, 1)
+            )
+            
+    def update_motor_cmd(self, time):
+        torques_ff = self.mpc._compute_torques_ff(time, self._q, self._v)
+        self.mpc.tau_full.append(torques_ff)
+        step = self.mpc.plan_step
+        for i, tau in enumerate(torques_ff, start=6):
+            i_act = self.joint_dof2act_id[i]
+            self.cmd.motor_cmd[i_act].q = self.mpc.q_plan[step, i]
+            self.cmd.motor_cmd[i_act].kp = self.robot_config.Kp if not self.mpc.first_solve else 40.
+            self.cmd.motor_cmd[i_act].dq = self.mpc.v_plan[step, i]
+            self.cmd.motor_cmd[i_act].kd = self.robot_config.Kd  if not self.mpc.first_solve else 3.
+            max_tau = self.safety.torque_limits[i_act]
+            self.cmd.motor_cmd[i_act].tau = np.clip(tau, -max_tau, max_tau)
+
+    def reset_controller(self):
+        print("reset controller")
+        time.sleep(0.1)
+        self.mpc.reset()
+        
+input("Press enter to start")
+runing_time = 0.0
+
+if __name__ == '__main__':
+    from sdk_controller.robots import Go2
+
+    if len(sys.argv) <2:
+        ChannelFactoryInitialize(1, "lo")
+    else:
+        ChannelFactoryInitialize(0, sys.argv[1])
+
+    dt = 1 / Go2.CONTROL_FREQ
+    robot_desc = get_robot_description(Go2.ROBOT_NAME)
+    feet_frame_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
+
+    mpc = LocomotionMPC(
+        path_urdf=robot_desc.urdf_path,
+        feet_frame_names = feet_frame_names,
+        robot_name=Go2.ROBOT_NAME,
+        joint_ref = robot_desc.q0,
+        sim_dt=dt,
+        print_info=False,
+        solve_async=True,
+        )
+    sdk_controller = MPC_SDK(mpc, Go2)
+
+    try:
+        while True:
+            step_start = time.perf_counter()
+            
+            sdk_controller.send_motor_command(runing_time)
+
+            runing_time += dt
+            time_until_next_step = dt - (time.perf_counter() - step_start)
+            if time_until_next_step > 0:
+                time.sleep(time_until_next_step)
+            
+    except KeyboardInterrupt:
+        print(mpc.print_timings())
+        mpc.plot_traj("q")
+        mpc.plot_traj("v")
+        mpc.plot_traj("f")
+        mpc.plot_traj("tau")
+        mpc.show_plots()
