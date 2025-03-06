@@ -28,6 +28,7 @@ class GaitPlanner(ABC):
         self.peak_swing = np.zeros((self.n_foot, self.nodes_per_cycle), dtype=np.int8)
         self.switch_cnt = np.zeros((self.n_foot, self.nodes_per_cycle), dtype=np.int8)
         self._init_gait_cycle()
+        self._init_peak_cycle()
 
     def _is_in_cnt_phase(self, foot : str, phase : float) -> bool:
         for cnt_interval in self.cnt_intervals.get(foot, []):
@@ -103,11 +104,19 @@ class GaitPlanner(ABC):
             self.switch_cnt[foot_id, end_idx] = -1
 
             # Peak in the middle
-            peak = end_idx + (start_idx+end_idx) // 2
-            o = abs(peak - end_idx) // 3
-            self.peak_swing[foot_id, end_idx+o:start_idx-o] = 1
-            if peak < len(self.peak_swing):
-                self.peak_swing[foot_id, peak] = 0.75
+            # peak = end_idx + (start_idx+end_idx) // 2
+            # o = abs(peak - end_idx) // 3
+            # o = 1
+            # self.peak_swing[foot_id, end_idx+o:start_idx-o] = 1
+            # self.peak_swing[foot_id, peak-o:peak+o+1] = 1
+            
+    def _init_peak_cycle(self):
+        # o = 1
+        # switch = np.diff(self.gait_sequence,
+        #                  prepend=self.gait_sequence[:, None, -1],
+        #                  axis=-1)
+        self.peak_swing[:, :] = 1 - self.gait_sequence
+        # self.peak_swing[switch != 0.] = 0
 
     def get_contacts(self, i_node : int, n_nodes) -> np.ndarray:
         """
@@ -365,6 +374,7 @@ class CustomContactPlanner(ContactPlanner):
         
         self.gait_sequence = cnt_sequence.copy()
         self.contact_sequence_full = None
+        self._init_peak_cycle()
     
     def get_contacts(self, i_node, n_nodes) -> np.ndarray:
         if self.contact_sequence_full is not None and n_nodes + i_node <= len(self.contact_locations_full):

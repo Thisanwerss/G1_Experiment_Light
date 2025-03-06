@@ -12,14 +12,14 @@ class MPCQuadrupedCyclic(MPCOptConfig):
     # Number of optimization nodes
     n_nodes : int = 25
     # Replanning frequency
-    replanning_freq : int = 30
+    replanning_freq : int = 25
     # gain on joint position for torque PD
     Kp : float = 20.
     # gain on joint velocities for torque PD
-    Kd : float = 1.5
+    Kd : float = 1.75
     ### Solver Config
     # Recompile solver
-    recompile: bool = True
+    recompile: bool = False
     # Solver maximum SQP iterations
     max_iter : int = 1
     # Maximum qp iteration for one SQP step 

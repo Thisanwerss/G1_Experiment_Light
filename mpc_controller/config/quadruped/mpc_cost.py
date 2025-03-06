@@ -6,7 +6,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from ..config_abstract import MPCCostConfig
 
-HIP_SHOULDER_ELBOW_SCALE = [15., 5., 1.]
+HIP_SHOULDER_ELBOW_SCALE = [10., 5., 1.]
 # PENALIZE JOINT MOTION
 W_JOINT = 1.
 N_FEET = 4
@@ -24,34 +24,34 @@ class Go2TrotCost(MPCCostConfig):
 
     # Updated base running cost weights
     W_base: np.ndarray = __init_np([
-        1e3, 1e3, 5e4,      # Base position weights
-        1e5, 1e5, 1e5,      # Base orientation (ypr) weights
-        1e5, 1e5, 5e3,      # Base linear velocity weights
-        1e4, 1e3, 1e3,      # Base angular velocity weights
-    ])
+        1e3, 2e3, 1e2,      # Base position weights
+        5e2, 5e2, 5e2,      # Base orientation (ypr) weights
+        2e2, 2e2, 1e0,      # Base linear velocity weights
+        1e0, 2e1, 1e1,      # Base angular velocity weights
+    ], 1.)
 
     # Updated base terminal cost weights
     W_e_base: np.ndarray = __init_np([
-        1e5, 1e5, 1e5,     # Base position weights
-        1e4, 1e4, 1e4,     # Base orientation (ypr) weights
-        1e3, 1e3, 1e3,     # Base linear velocity weights
-        1e3, 1e3, 1e3      # Base angular velocity weights
-    ])
+        1e2, 1e2, 1e3,      # Base position weights
+        5e2, 2e2, 1e2,      # Base orientation (ypr) weights
+        1e2, 2e2, 1e3,      # Base linear velocity weights
+        1e1, 1e2, 1e2,      # Base angular velocity weights
+    ], 1)
 
     # Joint running cost to nominal position and vel (hip, shoulder, elbow)
-    W_joint: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET + [0.5] * len(HIP_SHOULDER_ELBOW_SCALE) * N_FEET, W_JOINT)
+    W_joint: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET + [0.75, 0.25, 0.1] * N_FEET, 1.)
 
     # Joint terminal cost to nominal position and vel (hip, shoulder, elbow)
-    W_e_joint: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET + [0.1] * len(HIP_SHOULDER_ELBOW_SCALE) * N_FEET, W_JOINT)
+    W_e_joint: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET  + [0.1] * len(HIP_SHOULDER_ELBOW_SCALE) * N_FEET, 1.)
 
     # Acceleration cost weights for joints (hip, shoulder, elbow)
-    W_acc: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET, 5.0e-3)
+    W_acc: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET, 5.0e-4)
 
     # swing cost weightsc
-    W_swing: np.ndarray = __init_np([1e6] * N_FEET)
+    W_swing: np.ndarray = __init_np([2e4] * N_FEET)
 
     # force regularization weights for each foot
-    W_cnt_f_reg: np.ndarray = __init_np([[0.75, 0.75, 5e-1]] * N_FEET)
+    W_cnt_f_reg: np.ndarray = __init_np([[0.01, 0.01, 0.05]] * N_FEET)
 
     # Feet position constraint stability
     W_foot_pos_constr_stab: np.ndarray = __init_np([5e1] * N_FEET)

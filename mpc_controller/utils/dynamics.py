@@ -1,6 +1,7 @@
 from typing import List, Tuple
 import pinocchio as pin
 import numpy as np
+import time
 from contact_tamp.traj_opt_acados.models.floating_base_dynamics import FloatingBaseDynamics
 from contact_tamp.traj_opt_acados.models.point_contact import PointContact
 from contact_tamp.traj_opt_acados.utils.model_utils import toSymModel, loadModelImpl
@@ -36,6 +37,10 @@ class QuadrupedDynamics(FloatingBaseDynamics):
         self.joint_cost = self.add_expr(name="joint_cost", expr=self.get_joint_cost())
         self.acc_cost = self.add_expr(name="acc_cost", expr=self.get_acc_cost())
         self.swing_cost = self.add_expr(name="sw_cost", expr=self.get_swing_foot_cost())
+        
+        # Pinocchio state
+        self.__q = np.zeros(self.pin_model.nq)
+        self.__v = np.zeros(self.pin_model.nv)
 
     @property
     def pin_model(self):
@@ -44,31 +49,24 @@ class QuadrupedDynamics(FloatingBaseDynamics):
     @property
     def pin_data(self):
         return self.__raw_data
-    
+
     def update_pin(self, q : np.ndarray, v : np.ndarray):
         pin.framesForwardKinematics(self.pin_model, self.pin_data, q)
         pin.computeCentroidalMomentum(self.pin_model, self.pin_data, q, v)
     
-    @staticmethod
-    def convert_from_mujoco(q_mj : np.ndarray, v_mj : np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def convert_from_mujoco(self, q_mj : np.ndarray, v_mj : np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         # Convert state from MuJoCo to Pinocchio model format
-        q = np.zeros(len(q_mj) - 1)
-        q[:3] = q_mj[:3]
-        R_WB = pin.Quaternion(
-                w=q_mj[3],
-                x=q_mj[4],
-                y=q_mj[5],
-                z=q_mj[6]).toRotationMatrix()
-        q[5:2:-1] = pin.rpy.matrixToRpy(R_WB)
-        q[6:] = q_mj[7:]
-        # Convert velocties from MuJoCo to Pinocchio model format
-        # MuJoCo is v global and w local
-        v = v_mj.copy()
-        # w local to euler derivatives (z y x)
+        self.__q[:3] = q_mj[:3]  # Position copy
+        # Convert quaternion to RPY
+        self.__q[5:2:-1] = pin.rpy.matrixToRpy(pin.Quaternion(q_mj[3], q_mj[4], q_mj[5], q_mj[6]).toRotationMatrix())  # Direct RPY assignment
+        self.__q[6:] = q_mj[7:]  # Joint positions copy
+        
+        # Convert velocities: MuJoCo v (global) & w (local)
         # https://github.com/ANYbotics/kindr/blob/master/doc/cheatsheet/cheatsheet_latest.pdf
-        v[3:6] = local_angular_to_euler_derivative(q[3:6], v[3:6])
+        self.__v = v_mj[:]  # In-place copy
+        self.__v[3:6] = local_angular_to_euler_derivative(self.__q[3:6], v_mj[3:6])  # Angular velocity conversion
 
-        return q, v
+        return self.__q, self.__v
     
     @staticmethod
     def convert_to_mujoco(q : np.ndarray, v : np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
