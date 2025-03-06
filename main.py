@@ -96,10 +96,32 @@ def run_traj_opt(args):
     sim = Simulator(robot_desc.xml_scene_path, sim_dt=SIM_DT, viewer_dt=VIEWER_DT)
     q0_mj, v0_mj = sim.get_initial_state()
     q0, v0 = mpc.solver.dyn.convert_from_mujoco(q0_mj, v0_mj)
-    q_plan, v_plan, _, _, dt_plan = mpc.optimize(q0, v0)
-        
-    q_plan_mj = np.array([mpc.solver.dyn.convert_to_mujoco(q_plan[i], v_plan[i])[0] for i in range(len(q_plan))])
-    time_traj = np.concatenate(([0], np.cumsum(dt_plan)))
+    q_sol, v_sol, a_sol, f_sol, dt_sol = mpc.optimize(q0, v0)
+    
+    # Interpolate plan at sim_dt interval
+    mpc.q_plan[:], mpc.v_plan[:] = mpc.interpolate_state_trajectory(q_sol, v_sol, a_sol, dt_sol)
+    # Zero order interpolation (repeat) for actions
+    mpc.a_plan[:] = np.take_along_axis(a_sol, mpc.id_repeat.reshape(-1, 1), 0)
+    mpc.f_plan[:] = np.take_along_axis(f_sol, mpc.id_repeat.reshape(-1, 1, 1), 0)
+    mpc.tau_full[:] = np.array([mpc.solver.dyn.id_torques(
+                                mpc.q_plan[step],
+                                mpc.v_plan[step],
+                                mpc.a_plan[step],
+                                mpc.f_plan[step],
+                            ) for step in range(len(mpc.a_plan))])
+    
+    # Plot interpolated plan
+    mpc.delay, mpc.plan_step = 0, -1
+    mpc._record_plan()
+    mpc.plot_traj("q")
+    mpc.plot_traj("v")
+    mpc.plot_traj("f")
+    mpc.plot_traj("tau")
+    mpc.show_plots()
+    
+    # Visualize in mujoco
+    q_plan_mj = np.array([mpc.solver.dyn.convert_to_mujoco(q_sol[i], v_sol[i])[0] for i in range(len(q_sol))])
+    time_traj = np.concatenate(([0], np.cumsum(dt_sol)))
 
     sim.vs.set_high_quality()
     sim.visualize_trajectory(q_plan_mj, time_traj, record_video=args.record_video)
@@ -121,7 +143,7 @@ def run_mpc(args):
         )
     if not args.interactive:
         mpc.set_command(args.v_des, 0.0)
-
+        
     # Simulator with visual callback and state data recorder
     vis_feet_pos = ReferenceVisualCallback(mpc)
     data_recorder = StateDataRecorder(args.record_dir) if args.save_data else None
