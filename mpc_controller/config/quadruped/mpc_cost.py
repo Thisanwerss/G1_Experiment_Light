@@ -24,22 +24,22 @@ class Go2TrotCost(MPCCostConfig):
 
     # Updated base running cost weights
     W_base: np.ndarray = __init_np([
-        1e3, 2e3, 1e2,      # Base position weights
+        1e3, 3e3, 1e2,      # Base position weights
         5e2, 5e2, 5e2,      # Base orientation (ypr) weights
-        2e2, 2e2, 1e0,      # Base linear velocity weights
+        5e2, 1e1, 1e0,      # Base linear velocity weights
         1e0, 2e1, 1e1,      # Base angular velocity weights
     ], 1.)
 
     # Updated base terminal cost weights
     W_e_base: np.ndarray = __init_np([
-        1e2, 1e2, 1e3,      # Base position weights
-        5e2, 2e2, 1e2,      # Base orientation (ypr) weights
-        1e2, 2e2, 1e3,      # Base linear velocity weights
+        1e1, 1e1, 1e3,      # Base position weights
+        1e1, 1e2, 1e2,      # Base orientation (ypr) weights
+        5e2, 5e2, 1e3,      # Base linear velocity weights
         1e1, 1e2, 1e2,      # Base angular velocity weights
     ], 1)
 
     # Joint running cost to nominal position and vel (hip, shoulder, elbow)
-    W_joint: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET + [0.75, 0.25, 0.1] * N_FEET, 1.)
+    W_joint: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET + [0.03] * len(HIP_SHOULDER_ELBOW_SCALE) * N_FEET, 5.)
 
     # Joint terminal cost to nominal position and vel (hip, shoulder, elbow)
     W_e_joint: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET  + [0.1] * len(HIP_SHOULDER_ELBOW_SCALE) * N_FEET, 1.)
