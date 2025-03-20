@@ -19,7 +19,7 @@ class MPCQuadrupedCyclic(MPCOptConfig):
     Kd : float = 1.75
     ### Solver Config
     # Recompile solver
-    recompile: bool = False
+    recompile: bool = True
     # Solver maximum SQP iterations
     max_iter : int = 1
     # Maximum qp iteration for one SQP step 

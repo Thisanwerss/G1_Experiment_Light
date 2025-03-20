@@ -114,19 +114,25 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
         # Running cost weights (W) for base position, orientation, and velocity
         self.data["W"][self.dyn.base_cost.name] = np.array(self.config_cost.W_base)
         # Acceleration cost weights
-        self.data["W"][self.dyn.acc_cost.name] = np.array(self.config_cost.W_acc)
-        # Swing cost weights (for each foot)
-        self.data["W"][self.dyn.swing_cost.name] = np.array(self.config_cost.W_swing)
         # Joint cost to ref
         self.data["W"][self.dyn.joint_cost.name] = np.array(self.config_cost.W_joint)
         self.data["W_e"][self.dyn.joint_cost.name] = np.array(self.config_cost.W_e_joint)
-        self.data["W_e"][self.dyn.swing_cost.name] = np.array(self.config_cost.W_swing)
         if self.enable_time_opt:
             self.data["W"]["dt"][0] = np.array(self.config_cost.time_opt)
 
-        # Foot force regularization weights (for each foot)
+        # Contact costs (for each foot)
         for i, foot_cnt in enumerate(self.dyn.feet):
+            # Swing cost weights
+            self.data["W"][foot_cnt.swing_cost.name][:] = self.config_cost.W_swing[i]
+            self.data["W_e"][foot_cnt.swing_cost.name][:] = self.config_cost.W_swing[i]
+            # Eeff orientation cost
+            self.data["W"][foot_cnt.eeff_orientation_cost.name][:] = self.config_cost.W_eeff_ori[i]
+            self.data["W_e"][foot_cnt.eeff_orientation_cost.name][:] = self.config_cost.W_eeff_ori[i]
+            
+            # Foot force regularization weights
             self.data["W"][foot_cnt.f_reg.name] = np.array(self.config_cost.W_cnt_f_reg[i])
+            # Joint acceleration
+            self.data["W"][self.dyn.acc_cost.name] = np.array(self.config_cost.W_acc)
 
             # Foot displacement penalization
             if self.restrict_cnt:
@@ -167,9 +173,14 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
             self.cost_ref["dt"][:] = self.dt_nodes
 
         self.cost_ref[self.dyn.base_cost.name][:] = base_ref[:, None]
-        self.cost_ref[self.dyn.swing_cost.name][:] = step_height
         self.cost_ref_terminal[self.dyn.base_cost.name] = base_ref_e
-        self.cost_ref_terminal[self.dyn.swing_cost.name][:] = step_height
+        
+        for foot_cnt in self.dyn.feet:
+            self.cost_ref[foot_cnt.swing_cost.name][:] = step_height
+            self.cost_ref_terminal[foot_cnt.swing_cost.name][:] = step_height
+            self.cost_ref[foot_cnt.eeff_orientation_cost.name][:] = 0.
+            self.cost_ref_terminal[foot_cnt.eeff_orientation_cost.name][:] = 0.
+
 
         # Joint reference is nominal position with zero velocities
         joint_ref_vel = np.concatenate((joint_ref, np.zeros_like(joint_ref)))
@@ -219,10 +230,10 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
             self.params[foot_cnt.p_gain.name][:] = self.config_cost.W_foot_pos_constr_stab[i_foot]
             if self.restrict_cnt:
                 self.params[foot_cnt.restrict.name][:] = 0.
-                self.params[foot_cnt.range_radius.name][:] = self.config_cost.cnt_radius
+                self.params[foot_cnt.size.name][:] = self.config_cost.cnt_radius
             else:
                 self.params[foot_cnt.restrict.name][:] = 0.
-                self.params[foot_cnt.range_radius.name][:] = 1.0e10
+                self.params[foot_cnt.size.name][:] = 1.0e10
 
     def setup_cnt_status(self,
                         cnt_sequence : np.ndarray,
@@ -273,6 +284,43 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
             self.params[foot_cnt.plane_point.name] = contact_loc_plan[i_foot,].T
             self.cost_ref[foot_cnt.pos_cost.name] = contact_loc_plan[i_foot, 1:, :].T
             self.cost_ref_terminal[foot_cnt.pos_cost.name] = self.params[foot_cnt.plane_point.name][:, -1].T
+
+    def setup_contact_patch(self,
+                            patch_center : np.ndarray,
+                            patch_normal : np.ndarray,
+                            patch_rot : np.ndarray,
+                            patch_size : np.ndarray,
+                            size_margin : float = 0.03,
+                            ):
+        """
+        Set contact patch restriction for each end effectors.
+        """
+        for i, (arr, name) in enumerate(zip(
+            [patch_center, patch_normal, patch_rot, patch_size],
+            ["center", "normal", "rot", "size"])
+            ):
+            
+            assert np.shape(arr)[1] == self.config_opt.n_nodes + 1, \
+                f"Invalid {name} shape. Wrong number of optimization nodes."
+        
+            assert np.shape(arr)[0] == len(self.feet_frame_names), \
+                f"Invalid {name} shape. Wrong number of end effectors."
+            
+            if i < 3:
+                assert np.shape(arr)[-1] == 3, \
+                    f"Invalid {name} shape. 3D points required."
+            else:
+                assert np.shape(arr)[-1] == 2, \
+                    f"Invalid {name} shape. [size_x, size_y] required."
+
+        # Set reference for terminal contact
+        for i_foot, foot_cnt in enumerate(self.dyn.feet):
+            self.params[foot_cnt.plane_point.name][:] = patch_center[i_foot,].T
+            self.params[foot_cnt.plane_normal.name][:] = patch_rot[i_foot, :, :, 2].T
+            self.params[foot_cnt.plane_rot.name][ :3, :] = patch_rot[i_foot, :, :, 0].T
+            self.params[foot_cnt.plane_rot.name][3:6, :] = patch_rot[i_foot, :, :, 1].T
+            self.params[foot_cnt.plane_rot.name][6:9, :] = patch_rot[i_foot, :, :, 2].T
+            self.params[foot_cnt.size.name][:] = patch_size[i_foot].T - size_margin
         
     def print_contact_constraints(self):
         print()

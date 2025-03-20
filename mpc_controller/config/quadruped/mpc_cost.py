@@ -6,7 +6,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from ..config_abstract import MPCCostConfig
 
-HIP_SHOULDER_ELBOW_SCALE = [10., 5., 1.]
+HIP_SHOULDER_ELBOW_SCALE = [15., 5., 1.]
 # PENALIZE JOINT MOTION
 W_JOINT = 1.
 N_FEET = 4
@@ -49,6 +49,9 @@ class Go2TrotCost(MPCCostConfig):
 
     # swing cost weightsc
     W_swing: np.ndarray = __init_np([2e4] * N_FEET)
+
+    # End effector orientation wrt normal at contact
+    W_eeff_ori: np.ndarray = __init_np([1.] * N_FEET)
 
     # force regularization weights for each foot
     W_cnt_f_reg: np.ndarray = __init_np([[0.01, 0.01, 0.05]] * N_FEET)
@@ -103,9 +106,12 @@ class Go2SlowTrotCost(MPCCostConfig):
 
     # swing cost weightsc
     W_swing: np.ndarray = __init_np([5e5] * N_FEET)
+    
+    # End effector orientation wrt normal at contact
+    W_eeff_ori: np.ndarray = __init_np([0.] * N_FEET)
 
     # force regularization weights for each foot
-    W_cnt_f_reg: np.ndarray = __init_np([[1.25, 1.25, 0.9]] * N_FEET, 1.)
+    W_cnt_f_reg: np.ndarray = __init_np([[1.2, 1.2, 0.9]] * N_FEET, 1.)
 
     # Feet position constraint stability
     W_foot_pos_constr_stab: np.ndarray = __init_np([5e1] * N_FEET)
