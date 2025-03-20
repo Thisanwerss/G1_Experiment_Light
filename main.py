@@ -6,7 +6,7 @@ import numpy as np
 from mj_pin.abstract import VisualCallback, DataRecorder # type: ignore
 from mj_pin.simulator import Simulator # type: ignore
 from mj_pin.utils import get_robot_description   # type: ignore
-
+from mpc_controller.config.quadruped.utils import get_quadruped_config
 from mpc_controller.mpc import LocomotionMPC
 
 SIM_DT = 1.0e-3
@@ -82,10 +82,14 @@ def run_traj_opt(args):
     robot_desc = get_robot_description(args.robot_name)
     feet_frame_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
 
+    config_gait, config_opt, config_cost = get_quadruped_config(args.gait_name, args.robot_name)
+
     mpc = LocomotionMPC(
         path_urdf=robot_desc.urdf_path,
         feet_frame_names = feet_frame_names,
-        robot_name=args.robot_name,
+        config_opt=config_opt,
+        config_gait=config_gait,
+        config_cost=config_cost,
         joint_ref = robot_desc.q0,
         sim_dt=SIM_DT,
         print_info=True,
@@ -131,10 +135,14 @@ def run_mpc(args):
     robot_desc = get_robot_description(args.robot_name)
     feet_frame_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
 
+    config_gait, config_opt, config_cost = get_quadruped_config(args.gait_name, args.robot_name)
+
     mpc = LocomotionMPC(
         path_urdf=robot_desc.urdf_path,
         feet_frame_names = feet_frame_names,
-        robot_name=args.robot_name,
+        config_opt=config_opt,
+        config_gait=config_gait,
+        config_cost=config_cost,
         joint_ref = robot_desc.q0,
         interactive_goal=args.interactive,
         sim_dt=SIM_DT,
@@ -169,10 +177,14 @@ def run_open_loop(args):
     robot_desc = get_robot_description(args.robot_name)
     feet_frame_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
 
+    config_gait, config_opt, config_cost = get_quadruped_config(args.gait_name, args.robot_name)
+
     mpc = LocomotionMPC(
         path_urdf=robot_desc.urdf_path,
         feet_frame_names = feet_frame_names,
-        robot_name=args.robot_name,
+        config_opt=config_opt,
+        config_gait=config_gait,
+        config_cost=config_cost,
         joint_ref = robot_desc.q0,
         interactive_goal=False,
         sim_dt=SIM_DT,
@@ -195,6 +207,7 @@ if __name__ == "__main__":
     parser.add_argument('--mode', type=str, default="close_loop", choices=['traj_opt', 'open_loop', 'close_loop'], help='Mode to run the simulation.')
     parser.add_argument('--sim_time', type=float, default=5, help='Simulation time.')
     parser.add_argument('--robot_name', type=str, default='go2', help='Name of the robot.')
+    parser.add_argument('--gait_name', type=str, default='trot', help='Name of the gait to use.')
     parser.add_argument('--record_dir', type=str, default='./data/', help='Directory to save recorded data.')
     parser.add_argument('--v_des', type=float, nargs=3, default=[0.5, 0.0, 0.0], help='Desired velocity.')
     parser.add_argument('--save_data', action='store_true', help='Flag to save data.')

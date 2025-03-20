@@ -14,7 +14,7 @@ from .utils.interactive import SetVelocityGoal
 from .utils.contact_planner import RaiberContactPlanner, CustomContactPlanner, ContactPlanner
 from .utils.solver import QuadrupedAcadosSolver
 from .utils.profiling import time_fn, print_timings
-from .config.quadruped.utils import get_quadruped_config
+from .config.config_abstract import GaitConfig, MPCOptConfig, MPCCostConfig
 
 class LocomotionMPC(PinController):
     """
@@ -25,8 +25,9 @@ class LocomotionMPC(PinController):
     def __init__(self,
                  path_urdf : str,
                  feet_frame_names : List[str],
-                 robot_name : str,
-                 gait_name: str = "trot",
+                 config_opt : MPCOptConfig,
+                 config_cost : MPCCostConfig,
+                 config_gait : GaitConfig,
                  joint_ref : np.ndarray = None,
                  interactive_goal : bool = False,
                  sim_dt : float = 1.0e-3,
@@ -37,11 +38,13 @@ class LocomotionMPC(PinController):
                  solve_async : bool = True,
                  ) -> None:
 
-        self.gait_name = gait_name
         self.print_info = print_info
         self.height_offset = height_offset
         # Solver
-        self.config_gait, self.config_opt, self.config_cost = get_quadruped_config(gait_name, robot_name)
+        self.config_opt = config_opt
+        self.config_cost = config_cost
+        self.config_gait = config_gait
+        self.feet_frame_names = feet_frame_names
         self.solver = QuadrupedAcadosSolver(
             path_urdf,
             feet_frame_names,
@@ -73,7 +76,7 @@ class LocomotionMPC(PinController):
         self.n_foot = len(feet_frame_names)
         self._contact_planner_str = contact_planner 
 
-        if contact_planner.lower() == "raibert":
+        if self._contact_planner_str.lower() == "raibert":
             offset_hip_b = self.solver.dyn.get_feet_position_w()
             offset_hip_b[:, -1] = 0.
             self.contact_planner = RaiberContactPlanner(
@@ -88,7 +91,7 @@ class LocomotionMPC(PinController):
                 )
             self.restrict_cnt = True
             
-        elif contact_planner.lower() == "custom":
+        elif self._contact_planner_str.lower() == "custom":
             self.contact_planner = CustomContactPlanner(
                 feet_frame_names,
                 self.solver.dt_nodes,
@@ -116,6 +119,41 @@ class LocomotionMPC(PinController):
 
         # Init variables
         self.reset(reset_solver=False)
+
+    def update_configs(self,
+                       config_cost : MPCCostConfig = None,
+                       config_gait : GaitConfig = None,
+                       ):
+        if config_cost:
+            self.solver.update_cost()
+
+        if config_gait:
+            if self._contact_planner_str.lower() == "raibert":
+                offset_hip_b = self.solver.dyn.get_feet_position_w()
+                offset_hip_b[:, -1] = 0.
+                self.contact_planner = RaiberContactPlanner(
+                    self.feet_frame_names,
+                    self.solver.dt_nodes,
+                    self.config_gait,
+                    offset_hip_b,
+                    y_offset=0.02,
+                    x_offset=0.04,
+                    foot_size=0.0085,
+                    cache_cnt=False
+                    )
+                self.restrict_cnt = True
+                
+            elif self._contact_planner_str.lower() == "custom":
+                self.contact_planner = CustomContactPlanner(
+                    self.feet_frame_names,
+                    self.solver.dt_nodes,
+                    self.config_gait,
+                    )
+                self.restrict_cnt = True
+                
+            else:
+                self.contact_planner = ContactPlanner(self.feet_frame_names, self.solver.dt_nodes, self.config_gait)
+                self.restrict_cnt = False
 
     def reset(self, reset_solver : bool = True) -> None:
         """
