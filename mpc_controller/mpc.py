@@ -125,7 +125,7 @@ class LocomotionMPC(PinController):
                        config_gait : GaitConfig = None,
                        ):
         if config_cost:
-            self.solver.update_cost()
+            self.solver.update_cost(config_cost)
 
         if config_gait:
             if self._contact_planner_str.lower() == "raibert":
