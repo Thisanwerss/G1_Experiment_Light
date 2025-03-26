@@ -10,8 +10,8 @@ class AcyclicMPC(LocomotionMPC):
     This class defines the structure for an MPC controller
     where specific optimization methods can be implemented by inheriting classes.
     """
-    def __init__(self, path_urdf, feet_frame_names, config_opt, config_cost, config_gait, joint_ref = None, interactive_goal = False, sim_dt = 0.001, height_offset = 0, contact_planner = "", print_info = True, compute_timings = True, solve_async = True, solver_name : str = ""):
-        super().__init__(path_urdf, feet_frame_names, config_opt, config_cost, config_gait, joint_ref, interactive_goal, sim_dt, height_offset, contact_planner, print_info, compute_timings, solve_async, solver_name)
+    def __init__(self, path_urdf, feet_frame_names, config_opt, config_cost, config_gait, joint_ref = None, interactive_goal = False, sim_dt = 0.001, height_offset = 0, contact_planner = "", print_info = True, compute_timings = True, solve_async = True):
+        super().__init__(path_urdf, feet_frame_names, config_opt, config_cost, config_gait, joint_ref, interactive_goal, sim_dt, height_offset, contact_planner, print_info, compute_timings, solve_async)
         
         self.contact_planner = ContactPlannerAcyclic()
         self.solver.set_contact_restriction(True)
