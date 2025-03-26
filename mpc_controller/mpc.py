@@ -61,7 +61,7 @@ class LocomotionMPC(PinController):
         self.nq = self.solver.dyn.pin_model.nq
         self.nv = self.solver.dyn.pin_model.nv
         if joint_ref is None:
-            if self.solver.dyn.pin_model.referenceConfigurations["home"]:
+            if "home" in self.solver.dyn.pin_model.referenceConfigurations:
                 joint_ref = self.solver.dyn.pin_model.referenceConfigurations["home"][-self.nu:]
             else:
                 print("Joint reference not found in pinocchio model. Set to zero.")
@@ -610,8 +610,8 @@ class LocomotionMPC(PinController):
             self.q_plan_full.append(q.copy())
             self.v_plan_full.append(v)
             torques_ff = self.solver.dyn.id_torques(
-                q,
-                v,
+                self.q_plan[self.plan_step],
+                self.v_plan[self.plan_step],
                 self.a_plan[self.plan_step],
                 self.f_plan[self.plan_step],
             )
