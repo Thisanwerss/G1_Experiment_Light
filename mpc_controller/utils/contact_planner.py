@@ -328,7 +328,9 @@ class CustomContactPlanner(ContactPlanner):
         self.contact_locations_full = None
         self._contact_sequence = None
         self.contact_sequence_full = None
+        self.peak_swing_full = None
         self.n_full = 0
+        self.n_repeat = 3
         
     def set_contact_locations(self, contact_locations : np.ndarray) -> None:
         """
@@ -346,8 +348,7 @@ class CustomContactPlanner(ContactPlanner):
         self._contact_locations = contact_locations
         
         # Repeat last location
-        N_REPEAT = 3
-        last_locations = np.repeat(contact_locations[-1, None], N_REPEAT, axis=0)
+        last_locations = np.repeat(contact_locations[-1, None], self.n_repeat, axis=0)
         contact_locations_extended = np.concatenate((contact_locations, last_locations), axis=0)
         # Contact plan at dt interval
         self.contact_locations_full = np.repeat(contact_locations_extended, self.nodes_per_cycle, axis=0).transpose(1, 0, 2)
@@ -381,3 +382,48 @@ class CustomContactPlanner(ContactPlanner):
             return self.contact_sequence_full[:, i_node:i_node+n_nodes]
         else:
             return super().get_contacts(i_node, n_nodes)
+
+class ContactPlannerAcyclic():
+    def __init__(self):
+        
+        # Set contact plan for one motion, then last contact state is repeated
+        self.n_nodes_seq = 0
+        self.cnt_sequence = None
+        self.center_sequence = None
+        self.rot_patch_sequence = None
+        self.patch_size_sequence = None
+
+    def set_sequence(self, cnt_sequence : np.ndarray) -> None:
+        self.cnt_sequence = cnt_sequence
+        self.n_nodes_seq = self.cnt_sequence.shape[-1]
+
+    def set_center_rot_size(self,
+                            cnt_center : np.ndarray,
+                            cnt_rot : np.ndarray,
+                            cnt_size : np.ndarray
+                            ) -> None:
+        self.center_sequence = cnt_center
+        self.rot_patch_sequence = cnt_rot
+        self.patch_size_sequence = cnt_size
+        
+    def get_sequence(self, i_node : int, n_nodes : int) -> np.ndarray:
+        if self.cnt_sequence is None:
+            raise ValueError("Set contact sequence first")
+        index = np.arange(i_node, i_node+n_nodes)
+        index[index > self.n_nodes_seq - 1] = self.n_nodes_seq - 1
+        return np.take_along_axis(self.cnt_sequence,  np.expand_dims(index, 0), axis=-1)
+        
+    def get_peak(self, i_node : int, n_nodes : int) -> np.ndarray:
+        return 1 - self.get_sequence(i_node, n_nodes)
+    
+    def get_center_rot_size_patch(self, i_node : int, n_nodes : int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if (self.center_sequence is None or self.rot_patch_sequence is None or self.patch_size_sequence is None):
+            raise ValueError("Set patch data first")
+        
+        index = np.arange(i_node, i_node+n_nodes)
+        index[index > self.n_nodes_seq - 1] = self.n_nodes_seq - 1
+        return (
+            np.take_along_axis(self.center_sequence, np.expand_dims(index, (0, 2)), axis=1),
+            np.take_along_axis(self.rot_patch_sequence, np.expand_dims(index, (0, 2, 3)), axis=1),
+            np.take_along_axis(self.patch_size_sequence, np.expand_dims(index, (0, 2)), axis=1)
+        )

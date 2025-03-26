@@ -35,7 +35,7 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
             path_urdf,
             self.feet_frame_names,
             True,
-            mu_contact=0.8
+            mu_contact=0.7
             )
 
         dt_min, dt_max = self.config_opt.get_dt_bounds()
@@ -217,6 +217,9 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
             # If contact, setup initial contact location and normal
             if is_cnt:
                 next_swing = np.argmin(self.params[foot_cnt.active.name][0, :])
+                # if all contact
+                if next_swing == 0:
+                    next_swing = -1
                 self.params[foot_cnt.plane_point.name][:, :next_swing] = pos[:, None]
                 if self.print_info: print(f'Reset foot contact {foot_cnt.frame_name}, height {pos[2]}')
     
@@ -287,7 +290,6 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
 
     def setup_contact_patch(self,
                             patch_center : np.ndarray,
-                            patch_normal : np.ndarray,
                             patch_rot : np.ndarray,
                             patch_size : np.ndarray,
                             size_margin : float = 0.03,
@@ -296,8 +298,8 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
         Set contact patch restriction for each end effectors.
         """
         for i, (arr, name) in enumerate(zip(
-            [patch_center, patch_normal, patch_rot, patch_size],
-            ["center", "normal", "rot", "size"])
+            [patch_center, patch_rot, patch_size],
+            ["center", "rot", "size"])
             ):
             
             assert np.shape(arr)[1] == self.config_opt.n_nodes + 1, \
@@ -306,7 +308,7 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
             assert np.shape(arr)[0] == len(self.feet_frame_names), \
                 f"Invalid {name} shape. Wrong number of end effectors."
             
-            if i < 3:
+            if i < 2:
                 assert np.shape(arr)[-1] == 3, \
                     f"Invalid {name} shape. 3D points required."
             else:
@@ -411,6 +413,8 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
               step_height : float,
               cnt_sequence : np.ndarray,
               cnt_locations : Optional[np.ndarray] = None,
+              cnt_rot : Optional[np.ndarray] = None,
+              cnt_size : Optional[np.ndarray] = None,
               swing_peak : Optional[np.ndarray] = None,
               ):
         """
@@ -428,8 +432,12 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
 
         if self.restrict_cnt:
             assert not(cnt_locations is None), "Contact plan not provided"
-            self.setup_contact_loc(cnt_locations)
-
+            if (cnt_locations is not None):
+                if (cnt_rot is not None and cnt_size is not None):
+                    self.setup_contact_patch(cnt_locations, cnt_rot, cnt_size)
+                else:
+                    self.setup_contact_loc(cnt_locations)
+            
         self.setup_initial_feet_pos(i_node)
 
         # Warm start solver
