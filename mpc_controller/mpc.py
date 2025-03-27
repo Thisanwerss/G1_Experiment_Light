@@ -721,5 +721,5 @@ class LocomotionMPC(PinController):
         print_timings(self.solver.timings)
 
     def __del__(self):
-        self.executor.shutdown(wait=False, cancel_futures=True)
+        if self.executor: self.executor.shutdown(wait=False, cancel_futures=self.optimize_future.running())
         if self.velocity_goal: self.velocity_goal._stop_update_thread()

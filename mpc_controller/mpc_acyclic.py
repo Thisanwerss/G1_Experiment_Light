@@ -3,6 +3,7 @@ import numpy as np
 
 from .utils.contact_planner import ContactPlannerAcyclic
 from .mpc import LocomotionMPC
+from .utils.profiling import time_fn
 
 class AcyclicMPC(LocomotionMPC):
     """
@@ -48,7 +49,8 @@ class AcyclicMPC(LocomotionMPC):
     def keep_solution_as_reference(self):        
         self.base_pos_ref_traj, self.joint_pos_ref_traj = np.split(self.solver.q_sol_euler.copy(), [6,], axis=-1)
         self.base_vel_ref_traj, self.joint_vel_ref_traj = np.split(self.solver.v_sol_euler.copy(), [6,], axis=-1)
-
+    
+    @time_fn("optimize")
     def optimize(self,
                  q : np.ndarray,
                  v : np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
