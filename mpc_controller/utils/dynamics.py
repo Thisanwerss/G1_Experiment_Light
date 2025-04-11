@@ -35,7 +35,6 @@ class QuadrupedDynamics(FloatingBaseDynamics):
         self.base_cost = self.add_expr(name="base_cost", expr=self.get_base_cost())
         self.joint_cost = self.add_expr(name="joint_cost", expr=self.get_joint_cost())
         self.acc_cost = self.add_expr(name="acc_cost", expr=self.get_acc_cost())
-        self.swing_cost = self.add_expr(name="sw_cost", expr=self.get_swing_foot_cost())
 
     @property
     def pin_model(self):
@@ -113,7 +112,6 @@ class QuadrupedDynamics(FloatingBaseDynamics):
         problem.add_cost(self.base_cost, terminal=True)
         problem.add_cost(self.joint_cost, terminal=True)
         problem.add_cost(self.acc_cost)
-        problem.add_cost(self.swing_cost, terminal=True)
 
     def get_hg(self):
         return self.h
@@ -129,10 +127,6 @@ class QuadrupedDynamics(FloatingBaseDynamics):
     def get_acc_cost(self):
         return self.a[6:]
 
-    def get_swing_foot_cost(self):
-        z = cs.vcat([c.peak * c.get_position()[2] for c in self.feet])
-        return z
-    
     def id_torques(self,
                    q_plan : np.ndarray,
                    v_plan : np.ndarray,

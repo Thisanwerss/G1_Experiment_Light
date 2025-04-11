@@ -35,7 +35,7 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
             path_urdf,
             self.feet_frame_names,
             True,
-            mu_contact=0.8
+            mu_contact=0.7
             )
 
         dt_min, dt_max = self.config_opt.get_dt_bounds()
@@ -85,9 +85,10 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
         self.update_cost_weights()
 
         # Init solution
-        self.q_sol_euler = np.zeros_like(self.states[self.dyn.q.name])
-        self.v_sol_euler = np.zeros_like(self.states[self.dyn.v.name])
-        self.a_sol = np.zeros_like(self.inputs[self.dyn.a.name])
+        self.q_sol_euler = np.zeros_like(self.states[self.dyn.q.name]).T
+        self.v_sol_euler = np.zeros_like(self.states[self.dyn.v.name]).T
+        self.a_sol = np.zeros_like(self.inputs[self.dyn.a.name]).T
+        self.h_sol = np.zeros_like(self.states[self.dyn.h.name]).T
         self.f_sol = np.zeros((self.config_opt.n_nodes, 4, 3))
         self.dt_node_sol = np.zeros((self.config_opt.n_nodes))
         
@@ -113,19 +114,25 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
         # Running cost weights (W) for base position, orientation, and velocity
         self.data["W"][self.dyn.base_cost.name] = np.array(self.config_cost.W_base)
         # Acceleration cost weights
-        self.data["W"][self.dyn.acc_cost.name] = np.array(self.config_cost.W_acc)
-        # Swing cost weights (for each foot)
-        self.data["W"][self.dyn.swing_cost.name] = np.array(self.config_cost.W_swing)
         # Joint cost to ref
         self.data["W"][self.dyn.joint_cost.name] = np.array(self.config_cost.W_joint)
         self.data["W_e"][self.dyn.joint_cost.name] = np.array(self.config_cost.W_e_joint)
-        self.data["W_e"][self.dyn.swing_cost.name] = np.array(self.config_cost.W_swing)
         if self.enable_time_opt:
             self.data["W"]["dt"][0] = np.array(self.config_cost.time_opt)
 
-        # Foot force regularization weights (for each foot)
+        # Contact costs (for each foot)
         for i, foot_cnt in enumerate(self.dyn.feet):
+            # Swing cost weights
+            self.data["W"][foot_cnt.swing_cost.name][:] = self.config_cost.W_swing[i]
+            self.data["W_e"][foot_cnt.swing_cost.name][:] = self.config_cost.W_swing[i]
+            # Eeff orientation cost
+            self.data["W"][foot_cnt.eeff_orientation_cost.name][:] = self.config_cost.W_eeff_ori[i]
+            self.data["W_e"][foot_cnt.eeff_orientation_cost.name][:] = self.config_cost.W_eeff_ori[i]
+            
+            # Foot force regularization weights
             self.data["W"][foot_cnt.f_reg.name] = np.array(self.config_cost.W_cnt_f_reg[i])
+            # Joint acceleration
+            self.data["W"][self.dyn.acc_cost.name] = np.array(self.config_cost.W_acc)
 
             # Foot displacement penalization
             if self.restrict_cnt:
@@ -164,18 +171,21 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
         # Set the nominal time step
         if self.enable_time_opt:
             self.cost_ref["dt"][:] = self.dt_nodes
+
         self.cost_ref[self.dyn.base_cost.name][:] = base_ref[:, None]
         self.cost_ref_terminal[self.dyn.base_cost.name] = base_ref_e
+        
+        for foot_cnt in self.dyn.feet:
+            self.cost_ref[foot_cnt.swing_cost.name][:] = step_height
+            self.cost_ref_terminal[foot_cnt.swing_cost.name][:] = step_height
+            self.cost_ref[foot_cnt.eeff_orientation_cost.name][:] = 0.
+            self.cost_ref_terminal[foot_cnt.eeff_orientation_cost.name][:] = 0.
+
 
         # Joint reference is nominal position with zero velocities
         joint_ref_vel = np.concatenate((joint_ref, np.zeros_like(joint_ref)))
         self.cost_ref[self.dyn.joint_cost.name] = joint_ref_vel[:, None]
         self.cost_ref_terminal[self.dyn.joint_cost.name] = joint_ref_vel.copy()
-        
-        if not self.restrict_cnt:
-            self.cost_ref[self.dyn.swing_cost.name][:] = self.height_offset + step_height
-            self.cost_ref_terminal[self.dyn.swing_cost.name][:] = self.height_offset + step_height
-
 
     def setup_initial_state(self,
                             q_euler : np.ndarray,
@@ -207,6 +217,9 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
             # If contact, setup initial contact location and normal
             if is_cnt:
                 next_swing = np.argmin(self.params[foot_cnt.active.name][0, :])
+                # if all contact
+                if next_swing == 0:
+                    next_swing = -1
                 self.params[foot_cnt.plane_point.name][:, :next_swing] = pos[:, None]
                 if self.print_info: print(f'Reset foot contact {foot_cnt.frame_name}, height {pos[2]}')
     
@@ -218,11 +231,12 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
             self.params[foot_cnt.plane_point.name][:] = np.zeros((3,1))
             self.params[foot_cnt.plane_point.name][-1, :] = self.height_offset
             self.params[foot_cnt.p_gain.name][:] = self.config_cost.W_foot_pos_constr_stab[i_foot]
-            self.params[foot_cnt.restrict.name][:] = 0.
             if self.restrict_cnt:
-                self.params[foot_cnt.range_radius.name][:] = self.config_cost.cnt_radius
+                self.params[foot_cnt.restrict.name][:] = 0.
+                self.params[foot_cnt.size.name][:] = self.config_cost.cnt_radius
             else:
-                self.params[foot_cnt.range_radius.name][:] = 1.0e10
+                self.params[foot_cnt.restrict.name][:] = 0.
+                self.params[foot_cnt.size.name][:] = 1.0e10
 
     def setup_cnt_status(self,
                         cnt_sequence : np.ndarray,
@@ -252,7 +266,7 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
                 self.params[foot_cnt.restrict.name][0, :] = restrict
 
     @time_fn("setup_contact_plan")
-    def setup_contact_loc(self, contact_loc_plan : np.ndarray, step_height : float):
+    def setup_contact_loc(self, contact_loc_plan : np.ndarray):
         """
         Set the contact locations 
 
@@ -271,15 +285,45 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
         # Set reference for terminal contact
         for i_foot, foot_cnt in enumerate(self.dyn.feet):
             self.params[foot_cnt.plane_point.name] = contact_loc_plan[i_foot,].T
-            
-            # Reference cost distance to foothold
             self.cost_ref[foot_cnt.pos_cost.name] = contact_loc_plan[i_foot, 1:, :].T
             self.cost_ref_terminal[foot_cnt.pos_cost.name] = self.params[foot_cnt.plane_point.name][:, -1].T
-            
-            # Reference cost step height
-            self.cost_ref[self.dyn.swing_cost.name][i_foot, :] = contact_loc_plan[i_foot, 1:, -1] + step_height
-            self.cost_ref_terminal[self.dyn.swing_cost.name][i_foot, :] = contact_loc_plan[i_foot, -1, -1] + step_height
 
+    def setup_contact_patch(self,
+                            patch_center : np.ndarray,
+                            patch_rot : np.ndarray,
+                            patch_size : np.ndarray,
+                            size_margin : float = 0.03,
+                            ):
+        """
+        Set contact patch restriction for each end effectors.
+        """
+        for i, (arr, name) in enumerate(zip(
+            [patch_center, patch_rot, patch_size],
+            ["center", "rot", "size"])
+            ):
+            
+            assert np.shape(arr)[1] == self.config_opt.n_nodes + 1, \
+                f"Invalid {name} shape. Wrong number of optimization nodes."
+        
+            assert np.shape(arr)[0] == len(self.feet_frame_names), \
+                f"Invalid {name} shape. Wrong number of end effectors."
+            
+            if i < 2:
+                assert np.shape(arr)[-1] == 3, \
+                    f"Invalid {name} shape. 3D points required."
+            else:
+                assert np.shape(arr)[-1] == 2, \
+                    f"Invalid {name} shape. [size_x, size_y] required."
+
+        # Set reference for terminal contact
+        for i_foot, foot_cnt in enumerate(self.dyn.feet):
+            self.params[foot_cnt.plane_point.name][:] = patch_center[i_foot,].T
+            self.params[foot_cnt.plane_normal.name][:] = patch_rot[i_foot, :, :, 2].T
+            self.params[foot_cnt.plane_rot.name][ :3, :] = patch_rot[i_foot, :, :, 0].T
+            self.params[foot_cnt.plane_rot.name][3:6, :] = patch_rot[i_foot, :, :, 1].T
+            self.params[foot_cnt.plane_rot.name][6:9, :] = patch_rot[i_foot, :, :, 2].T
+            self.params[foot_cnt.size.name][:] = patch_size[i_foot].T - size_margin
+        
     def print_contact_constraints(self):
         print()
         print("-"*10, "Contacts", "-"*10)
@@ -369,6 +413,8 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
               step_height : float,
               cnt_sequence : np.ndarray,
               cnt_locations : Optional[np.ndarray] = None,
+              cnt_rot : Optional[np.ndarray] = None,
+              cnt_size : Optional[np.ndarray] = None,
               swing_peak : Optional[np.ndarray] = None,
               ):
         """
@@ -386,8 +432,12 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
 
         if self.restrict_cnt:
             assert not(cnt_locations is None), "Contact plan not provided"
-            self.setup_contact_loc(cnt_locations, step_height)
-
+            if (cnt_locations is not None):
+                if (cnt_rot is not None and cnt_size is not None):
+                    self.setup_contact_patch(cnt_locations, cnt_rot, cnt_size)
+                else:
+                    self.setup_contact_loc(cnt_locations)
+            
         self.setup_initial_feet_pos(i_node)
 
         # Warm start solver
@@ -408,32 +458,29 @@ class QuadrupedAcadosSolver(AcadosSolverHelper):
         super().solve(print_stats=self.print_info, print_time=self.print_info)
         self.parse_sol()
 
-        self.q_sol_euler = self.states[self.dyn.q.name].T.copy()
-
         # positions, [n_nodes + 1, 19]
-        # q_sol = ypr_to_quat_state_batched(self.q_sol_euler)
+        self.q_sol_euler[:] = self.states[self.dyn.q.name].T
         
         # velocities, [n_nodes + 1, 18]
-        self.v_sol_euler = self.states[self.dyn.v.name].T.copy()
-        # v_sol = v_glob_to_local_batched(self.q_sol_euler, self.v_sol_euler)
+        self.v_sol_euler[:] = self.states[self.dyn.v.name].T
 
         # centroidal momentum, [n_nodes + 1, 6]
-        self.h_sol = self.states[self.dyn.h.name].T.copy()
+        self.h_sol[:] = self.states[self.dyn.h.name].T
 
         # acceleration, [n_nodes, 18]
-        self.a_sol = self.inputs[self.dyn.a.name].T.copy()
+        self.a_sol[:] = self.inputs[self.dyn.a.name].T
 
         # end effector forces, [n_nodes, 4, 3]
-        self.f_sol = np.array([
+        self.f_sol[:] = np.array([
             self.inputs[f"f_{foot_cnt.frame_name}_{self.dyn.name}"]
             for foot_cnt in self.dyn.feet
         ]).transpose(2, 0, 1).copy()
 
         # dt time, [n_nodes, ]
         if self.enable_time_opt:
-            self.dt_node_sol = self.inputs["dt"].flatten().copy()
+            self.dt_node_sol[:] = self.inputs["dt"].flatten()
         else:
-            self.dt_node_sol = np.full((len(self.a_sol),), self.dt_nodes)
+            self.dt_node_sol[:] = np.full((len(self.a_sol),), self.dt_nodes)
 
         return self.q_sol_euler, self.v_sol_euler, self.a_sol, self.f_sol, self.dt_node_sol
 

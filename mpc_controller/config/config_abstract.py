@@ -112,6 +112,9 @@ class MPCCostConfig:
     # Weights for swing cost (eeff motion)
     # length: number of eeff
     W_swing: np.ndarray
+    # End effector orientation wrt normal at contact
+    # length: number of eeff
+    W_eeff_ori: np.ndarray
     # Weights for force regularization (per foot) [[x, y, z], ...]
     # length: number of eeff
     W_cnt_f_reg: np.ndarray

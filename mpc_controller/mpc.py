@@ -14,7 +14,7 @@ from .utils.interactive import SetVelocityGoal
 from .utils.contact_planner import RaiberContactPlanner, CustomContactPlanner, ContactPlanner
 from .utils.solver import QuadrupedAcadosSolver
 from .utils.profiling import time_fn, print_timings
-from .config.quadruped.utils import get_quadruped_config
+from .config.config_abstract import GaitConfig, MPCOptConfig, MPCCostConfig
 
 class LocomotionMPC(PinController):
     """
@@ -25,8 +25,9 @@ class LocomotionMPC(PinController):
     def __init__(self,
                  path_urdf : str,
                  feet_frame_names : List[str],
-                 robot_name : str,
-                 gait_name: str = "trot",
+                 config_opt : MPCOptConfig,
+                 config_cost : MPCCostConfig,
+                 config_gait : GaitConfig,
                  joint_ref : np.ndarray = None,
                  interactive_goal : bool = False,
                  sim_dt : float = 1.0e-3,
@@ -37,11 +38,13 @@ class LocomotionMPC(PinController):
                  solve_async : bool = True,
                  ) -> None:
 
-        self.gait_name = gait_name
         self.print_info = print_info
         self.height_offset = height_offset
         # Solver
-        self.config_gait, self.config_opt, self.config_cost = get_quadruped_config(gait_name, robot_name)
+        self.config_opt = config_opt
+        self.config_cost = config_cost
+        self.config_gait = config_gait
+        self.feet_frame_names = feet_frame_names
         self.solver = QuadrupedAcadosSolver(
             path_urdf,
             feet_frame_names,
@@ -58,7 +61,7 @@ class LocomotionMPC(PinController):
         self.nq = self.solver.dyn.pin_model.nq
         self.nv = self.solver.dyn.pin_model.nv
         if joint_ref is None:
-            if self.solver.dyn.pin_model.referenceConfigurations["home"]:
+            if "home" in self.solver.dyn.pin_model.referenceConfigurations:
                 joint_ref = self.solver.dyn.pin_model.referenceConfigurations["home"][-self.nu:]
             else:
                 print("Joint reference not found in pinocchio model. Set to zero.")
@@ -73,7 +76,7 @@ class LocomotionMPC(PinController):
         self.n_foot = len(feet_frame_names)
         self._contact_planner_str = contact_planner 
 
-        if contact_planner.lower() == "raibert":
+        if self._contact_planner_str.lower() == "raibert":
             offset_hip_b = self.solver.dyn.get_feet_position_w()
             offset_hip_b[:, -1] = 0.
             self.contact_planner = RaiberContactPlanner(
@@ -88,7 +91,7 @@ class LocomotionMPC(PinController):
                 )
             self.restrict_cnt = True
             
-        elif contact_planner.lower() == "custom":
+        elif self._contact_planner_str.lower() == "custom":
             self.contact_planner = CustomContactPlanner(
                 feet_frame_names,
                 self.solver.dt_nodes,
@@ -105,6 +108,7 @@ class LocomotionMPC(PinController):
         # Set params
         self.Kp = self.solver.config_opt.Kp
         self.Kd = self.solver.config_opt.Kd
+        self.scale_joint = np.repeat([2., 1.5, 1], 4)
         self.sim_dt = sim_dt
         self.dt_nodes : float = self.solver.dt_nodes
         self.replanning_freq : int = self.config_opt.replanning_freq
@@ -115,6 +119,41 @@ class LocomotionMPC(PinController):
 
         # Init variables
         self.reset(reset_solver=False)
+
+    def update_configs(self,
+                       config_cost : MPCCostConfig = None,
+                       config_gait : GaitConfig = None,
+                       ):
+        if config_cost:
+            self.solver.update_cost(config_cost)
+
+        if config_gait:
+            if self._contact_planner_str.lower() == "raibert":
+                offset_hip_b = self.solver.dyn.get_feet_position_w()
+                offset_hip_b[:, -1] = 0.
+                self.contact_planner = RaiberContactPlanner(
+                    self.feet_frame_names,
+                    self.solver.dt_nodes,
+                    self.config_gait,
+                    offset_hip_b,
+                    y_offset=0.02,
+                    x_offset=0.04,
+                    foot_size=0.0085,
+                    cache_cnt=False
+                    )
+                self.restrict_cnt = True
+                
+            elif self._contact_planner_str.lower() == "custom":
+                self.contact_planner = CustomContactPlanner(
+                    self.feet_frame_names,
+                    self.solver.dt_nodes,
+                    self.config_gait,
+                    )
+                self.restrict_cnt = True
+                
+            else:
+                self.contact_planner = ContactPlanner(self.feet_frame_names, self.solver.dt_nodes, self.config_gait)
+                self.restrict_cnt = False
 
     def reset(self, reset_solver : bool = True) -> None:
         """
@@ -222,7 +261,7 @@ class LocomotionMPC(PinController):
         # Setup reference velocities in global frame
         # v_des is in local frame
         # w_yaw in global frame
-        R_WB = pin.rpy.rpyToMatrix(self.base_ref_vel_tracking[3:6][::-1])
+        R_WB = pin.rpy.rpyToMatrix(base_ref[5:2:-1])
         v_des_glob = np.round(R_WB @ self.v_des, 1)
 
         base_ref[6:9] = v_des_glob
@@ -233,8 +272,8 @@ class LocomotionMPC(PinController):
 
         # Compute velocity in global frame
         # Apply angular velocity
-        R_yaw = pin.rpy.rpyToMatrix(self.w_des * t_horizon)
-        base_ref_e[6:9] = R_yaw @ base_ref[6:9]
+        # R_yaw = pin.rpy.rpyToMatrix(self.w_des * t_horizon)
+        # base_ref_e[6:9] = R_yaw @ base_ref[6:9]
 
         if self.velocity_goal:
             pos_ref = np.round(q[:3], 2)
@@ -242,23 +281,28 @@ class LocomotionMPC(PinController):
         else:
             pos_ref = self.base_ref_vel_tracking[:3]
             yaw_ref = self.base_ref_vel_tracking[3]
+        yaw_ref = self.base_ref_vel_tracking[3]
+        pos_ref = np.round(q[:3], 2)
 
         base_ref_e[:2] = pos_ref[:2] + v_des_glob[:2] * t_horizon
+        base_ref[:2] = pos_ref[:2] + v_des_glob[:2] * t_horizon
+        base_ref_e[3] = yaw_ref + self.w_des[-1] * t_horizon
+        base_ref[3] = yaw_ref + self.w_des[-1] * t_horizon
         # Clip base ref in direction of the motion
         # (don't go too far if the robot is too slow)
-        base_ref_e[:2] = np.clip(base_ref_e[:2],
-                -base_ref[:2] + v_des_glob[:2] * t_horizon * 1.2,
-                 base_ref[:2] + v_des_glob[:2] * t_horizon * 1.2,
-                )
+        # base_ref_e[:2] = np.clip(base_ref_e[:2],
+        #         -base_ref[:2] + v_des_glob[:2] * t_horizon * 1.2,
+        #          base_ref[:2] + v_des_glob[:2] * t_horizon * 1.2,
+        #         )
         
-        base_ref_e[3] = yaw_ref + self.w_des[-1] * t_horizon
-        base_ref_e[3] = np.clip(base_ref_e[3],
-                -yaw_ref + self.w_des[-1] * t_horizon * 1.5,
-                 yaw_ref + self.w_des[-1] * t_horizon * 1.5,
-                )
-        # Set the base ref inbetween
-        base_ref[:2] += (base_ref_e[:2] - base_ref[:2]) * 0.75
-        base_ref[3] += (base_ref_e[3] - base_ref[3]) * 0.75
+        # base_ref_e[3] = yaw_ref + self.w_des[-1] * t_horizon
+        # base_ref_e[3] = np.clip(base_ref_e[3],
+        #         -yaw_ref + self.w_des[-1] * t_horizon * 1.5,
+        #          yaw_ref + self.w_des[-1] * t_horizon * 1.5,
+        #         )
+        # # Set the base ref inbetween
+        # base_ref[:2] += (base_ref_e[:2] - base_ref[:2]) * 0.75
+        # base_ref[3] += (base_ref_e[3] - base_ref[3]) * 0.75
         # Base vertical vel
         base_ref_e[8] = 0.
         # Base pitch roll
@@ -373,8 +417,7 @@ class LocomotionMPC(PinController):
         time_traj = np.cumsum(dt_sol)
         time_traj = np.concatenate(([0.], time_traj))
         q_plan, v_plan = self.interpolate_trajectory_with_derivatives(time_traj, q_sol, v_sol, a_sol)
-        # 0 is current state
-        return q_plan[:-1], v_plan[:-1]
+        return q_plan, v_plan
             
     def interpolate_trajectory_with_derivatives(
         self,
@@ -394,11 +437,11 @@ class LocomotionMPC(PinController):
         Returns:
             np.ndarray: Interpolated trajectory at 1/sim_dt frequency. Shape: (T, d).
         """
-        t_interpolated = np.arange(time_traj[0], time_traj[-1], self.sim_dt)
+        t_interpolated = np.linspace(time_traj[0], time_traj[-1], self.n_interp_plan)
         poly_pos = CubicHermiteSpline(time_traj, positions, velocities)
         interpolated_pos = poly_pos(t_interpolated)
-        a0 = accelerations[0].reshape(1, -1)
-        accelerations = np.concatenate((a0, accelerations))
+        a0 = (velocities[1] - velocities[0]) / (time_traj[1] - time_traj[0])
+        accelerations = np.concatenate((a0[None, :], accelerations))
         poly_vel = CubicHermiteSpline(time_traj, velocities, accelerations)
         interpolated_vel = poly_vel(t_interpolated)
 
@@ -468,7 +511,7 @@ class LocomotionMPC(PinController):
             Compute torques based on robot state in the MuJoCo simulation.
             """
             # Get state
-            t, q_mj, v_mj = mj_data.time, mj_data.qpos, mj_data.qvel
+            t, q_mj, v_mj = mj_data.time, mj_data.qpos.copy(), mj_data.qvel.copy()
             torques_ff = self._compute_torques_ff(t, q_mj, v_mj)
             torques_pd = self._compute_pd_torques(q_mj, v_mj, torques_ff)
             # Record torques
@@ -533,8 +576,8 @@ class LocomotionMPC(PinController):
                 # Apply delay, not for first iteration
                 if (self.solve_async and not self.first_solve):
                     replanning_time = t - self.start_time
-                    replanning_time -= 4.0e-3
-                    self.delay = math.ceil(replanning_time / self.sim_dt)
+                    # replanning_time -= 4.0e-3
+                    self.delay = math.ceil(replanning_time / self.sim_dt) - 1
                 else:
                     self.delay = 0
 
@@ -564,11 +607,11 @@ class LocomotionMPC(PinController):
         # Compute inverse dynamics torques from solver
         else:
             # Record true state
-            self.q_plan_full.append(q)
+            self.q_plan_full.append(q.copy())
             self.v_plan_full.append(v)
             torques_ff = self.solver.dyn.id_torques(
-                q,
-                v,
+                self.q_plan[self.plan_step],
+                self.v_plan[self.plan_step],
                 self.a_plan[self.plan_step],
                 self.f_plan[self.plan_step],
             )
@@ -578,10 +621,10 @@ class LocomotionMPC(PinController):
     def _compute_pd_torques(self, q : np.ndarray, v : np.ndarray, torques_ff : np.ndarray) -> np.ndarray:
         Kp = 44 if self.first_solve else self.Kp
         Kd = 5 if self.first_solve else self.Kd
-            
+
         torques_pd = (torques_ff +
-                      Kp * (self.q_plan[self.plan_step, -self.nu:] - q[-self.nu:]) +
-                      Kd * (self.v_plan[self.plan_step, -self.nu:] - v[-self.nu:]))
+                      Kp * self.scale_joint * (self.q_plan[self.plan_step, -self.nu:] - q[-self.nu:]) +
+                      Kd * self.scale_joint * (self.v_plan[self.plan_step, -self.nu:] - v[-self.nu:]))
         return torques_pd
         
     def plot_current_vs_plan(self, q_mj: np.ndarray, v_mj: np.ndarray):
@@ -638,7 +681,9 @@ class LocomotionMPC(PinController):
         
         if hasattr(self, plan_var_name):
             plan_full = getattr(self, plan_var_name)
-            plan_full = np.vstack(plan_full[:N])
+            if len(plan_full) > 0:
+                plan_full = np.vstack(plan_full[:N])
+            else: plan_full = None
         else: plan_full = None
 
         # Number of dimensions in the plan (columns)
@@ -676,5 +721,5 @@ class LocomotionMPC(PinController):
         print_timings(self.solver.timings)
 
     def __del__(self):
-        self.executor.shutdown(wait=False, cancel_futures=True)
+        if self.executor: self.executor.shutdown(wait=False, cancel_futures=self.optimize_future.running())
         if self.velocity_goal: self.velocity_goal._stop_update_thread()
