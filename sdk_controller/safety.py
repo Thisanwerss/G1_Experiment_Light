@@ -16,7 +16,7 @@ class SafetyLayer:
         self.joint_dof2act_id = {v : k for k, v in self.joint_act_id2dof.items()}
         self.joint_limits = {}
         self.torque_limits = {}
-        self.base_orientation_limit = 25 * np.pi / 180.
+        self.base_orientation_limit = 35 * np.pi / 180.
         self.scale_joint_limit = 1.
         self.scale_torque_limit = 0.9
 

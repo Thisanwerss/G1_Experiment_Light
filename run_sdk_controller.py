@@ -3,6 +3,7 @@ import sys
 import numpy as np
 import mujoco
 from mpc_controller.mpc import LocomotionMPC
+from mpc_controller.config.quadruped.utils import get_quadruped_config
 from sdk_controller.abstract import SDKController
 from mj_pin.utils import get_robot_description, mj_joint_name2act_id, mj_joint_name2dof
 
@@ -20,12 +21,14 @@ from unitree_sdk2py.utils.crc import CRC
 
 class MPC_SDK(SDKController):
     def __init__(self,
-                 mpc,
+                 mpc : LocomotionMPC,
                  robot_config,
                  xml_path = "",
                  v_max=0.5,
                  w_max=0.5):
         self.mpc = mpc
+        self.mpc.scale_joint = np.repeat([1.2, 1.1, 1], 4)
+
         self.v_max = v_max
         self.w_max = w_max
         self.v_des = np.zeros(3)
@@ -42,13 +45,13 @@ class MPC_SDK(SDKController):
     def update_motor_cmd(self, time):
         torques_ff = self.mpc._compute_torques_ff(time, self._q, self._v)
         self.mpc.tau_full.append(torques_ff)
-        step = self.mpc.plan_step
+        step = self.mpc.plan_step + 2
         for i, tau in enumerate(torques_ff, start=6):
             i_act = self.joint_dof2act_id[i]
             self.cmd.motor_cmd[i_act].q = self.mpc.q_plan[step, i]
-            self.cmd.motor_cmd[i_act].kp = self.robot_config.Kp if not self.mpc.first_solve else 40.
+            self.cmd.motor_cmd[i_act].kp = self.mpc.scale_joint[i-6] * self.robot_config.Kp if not self.mpc.first_solve else 50.
             self.cmd.motor_cmd[i_act].dq = self.mpc.v_plan[step, i]
-            self.cmd.motor_cmd[i_act].kd = self.robot_config.Kd  if not self.mpc.first_solve else 3.
+            self.cmd.motor_cmd[i_act].kd = self.mpc.scale_joint[i-6] * self.robot_config.Kd if not self.mpc.first_solve else 3.5
             max_tau = self.safety.torque_limits[i_act]
             self.cmd.motor_cmd[i_act].tau = np.clip(tau, -max_tau, max_tau)
 
@@ -59,7 +62,7 @@ class MPC_SDK(SDKController):
         
 input("Press enter to start")
 runing_time = 0.0
-
+       
 if __name__ == '__main__':
     from sdk_controller.robots import Go2
 
@@ -72,15 +75,23 @@ if __name__ == '__main__':
     robot_desc = get_robot_description(Go2.ROBOT_NAME)
     feet_frame_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
 
+    gait_name = "trot"
+    config_gait, config_opt, config_cost = get_quadruped_config(gait_name, Go2.ROBOT_NAME)
+    config_gait.nominal_period = 0.5
+    config_opt.recompile = False
+
     mpc = LocomotionMPC(
         path_urdf=robot_desc.urdf_path,
         feet_frame_names = feet_frame_names,
-        robot_name=Go2.ROBOT_NAME,
+        config_opt=config_opt,
+        config_gait=config_gait,
+        config_cost=config_cost,
         joint_ref = robot_desc.q0,
         sim_dt=dt,
         print_info=False,
         solve_async=True,
         )
+    
     sdk_controller = MPC_SDK(mpc, Go2)
 
     try:

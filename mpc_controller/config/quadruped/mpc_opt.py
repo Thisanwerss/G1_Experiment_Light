@@ -10,9 +10,9 @@ class MPCQuadrupedCyclic(MPCOptConfig):
     # Time horizon (s)
     time_horizon : float = 1.
     # Number of optimization nodes
-    n_nodes : int = 25
+    n_nodes : int = 30
     # Replanning frequency
-    replanning_freq : int = 25
+    replanning_freq : int = 20
     # gain on joint position for torque PD
     Kp : float = 20.
     # gain on joint velocities for torque PD

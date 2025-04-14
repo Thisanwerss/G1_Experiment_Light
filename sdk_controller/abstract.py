@@ -235,26 +235,17 @@ class SDKController(SDKControllerBase):
         
         p_imu_B = self.robot_config.P_IMU_IN_BASE
         R_imu_B = self.robot_config.R_IMU_IN_BASE
-        p_B_imu = - R_imu_B.T @ p_imu_B
-        R_B_imu = R_imu_B.T
 
         # Convert quaternion to rotation matrix
         R_IMU_W_flat = np.zeros(9)
         mujoco.mju_quat2Mat(R_IMU_W_flat, self._q[3:7])
-        R_imu_W = R_IMU_W_flat.reshape((3, 3), order='F')
+        R_imu_W = R_IMU_W_flat.reshape((3, 3), order='A')
         # Get base position
-        self._q[0:3] = R_B_imu @ self.last_high_state.position + p_B_imu
-        R_B_W = R_B_imu @ R_imu_W
-        mujoco.mju_mat2Quat(self._q[3:7], R_B_W.reshape(-1, order='F'))
-
-        # Transform IMU linear velocity to base frame
-        skew_p_B_imu = np.array([
-            [0, -p_B_imu[2], p_B_imu[1]],
-            [p_B_imu[2], 0, -p_B_imu[0]],
-            [-p_B_imu[1], p_B_imu[0], 0]
-        ])
-        self._v[0:3] = R_B_imu @ self.last_high_state.velocity + skew_p_B_imu @ R_B_imu @ self._v[3:6]
-        self._v[3:6] = R_B_imu @ self._v[3:6]
+        self._q[0:3] = R_imu_W @ (- R_imu_B.T @ p_imu_B) + self.last_high_state.position
+        R_B_W = R_imu_W @ R_imu_B.T
+        mujoco.mju_mat2Quat(self._q[3:7], R_B_W.reshape(-1, order='A'))
+        # Linear velocity. Same angular velocity
+        self._v[0:3] = self.last_high_state.velocity + np.cross(R_B_W @ self._v[3:6], self._q[0:3] - self.last_high_state.position)
 
     def send_motor_command(self, time : float):
 
@@ -278,6 +269,7 @@ class SDKController(SDKControllerBase):
                 self.reset_controller()
                 self.damping_running = True
                 self.controller_running = False
+                self.damping_motor_cmd()
         else:
             self.damping_motor_cmd()
         

@@ -414,8 +414,9 @@ class LocomotionMPC(PinController):
         Repeat for inputs.
         Linear interpolation for states.
         """
-        time_traj = np.cumsum(dt_sol)
-        time_traj = np.concatenate(([0.], time_traj))
+        # time_traj = np.cumsum(dt_sol)
+        N = len(dt_sol)
+        time_traj = np.linspace(0, N * dt_sol[-1], N+1)
         q_plan, v_plan = self.interpolate_trajectory_with_derivatives(time_traj, q_sol, v_sol, a_sol)
         return q_plan, v_plan
             
@@ -440,7 +441,7 @@ class LocomotionMPC(PinController):
         t_interpolated = np.linspace(time_traj[0], time_traj[-1], self.n_interp_plan)
         poly_pos = CubicHermiteSpline(time_traj, positions, velocities)
         interpolated_pos = poly_pos(t_interpolated)
-        a0 = (velocities[1] - velocities[0]) / (time_traj[1] - time_traj[0])
+        a0 = np.zeros_like(velocities[0])
         accelerations = np.concatenate((a0[None, :], accelerations))
         poly_vel = CubicHermiteSpline(time_traj, velocities, accelerations)
         interpolated_vel = poly_vel(t_interpolated)
@@ -496,7 +497,7 @@ class LocomotionMPC(PinController):
         return q_full_traj_arr
     
     def set_convergence_on_first_iter(self):
-        N_SQP_FIRST = 15
+        N_SQP_FIRST = 30
         if self.first_solve:
             self.solver.set_max_iter(N_SQP_FIRST)
             self.solver.set_nlp_tol(self.solver.config_opt.nlp_tol / 10.)
@@ -576,8 +577,8 @@ class LocomotionMPC(PinController):
                 # Apply delay, not for first iteration
                 if (self.solve_async and not self.first_solve):
                     replanning_time = t - self.start_time
-                    # replanning_time -= 4.0e-3
-                    self.delay = math.ceil(replanning_time / self.sim_dt) - 1
+                    # replanning_time += 0.01
+                    self.delay = math.floor(replanning_time / self.sim_dt)
                 else:
                     self.delay = 0
 
@@ -610,8 +611,8 @@ class LocomotionMPC(PinController):
             self.q_plan_full.append(q.copy())
             self.v_plan_full.append(v)
             torques_ff = self.solver.dyn.id_torques(
-                self.q_plan[self.plan_step],
-                self.v_plan[self.plan_step],
+                q,#self.q_plan[self.plan_step],
+                v,#self.v_plan[self.plan_step],
                 self.a_plan[self.plan_step],
                 self.f_plan[self.plan_step],
             )

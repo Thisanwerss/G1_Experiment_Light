@@ -16,6 +16,6 @@ STAND_DOWN_JOINT_POS = np.array([
 P_IMU_IN_BASE = np.array([-0.02557, 0, 0.04232])
 R_IMU_IN_BASE = np.eye(3)
 
-CONTROL_FREQ = 125
-Kp = 18.
-Kd = 1.4
+CONTROL_FREQ = 100
+Kp = 22.5
+Kd = 1.8
