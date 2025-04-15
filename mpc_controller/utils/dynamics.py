@@ -14,6 +14,7 @@ class QuadrupedDynamics(FloatingBaseDynamics):
                  feet_frame_names: List[str],
                  cnt_patch_restriction: bool = False,
                  mu_contact: float = 0.7,
+                 torque_limit: bool = True,
                  ):
         # Load pinocchio model
         self.__raw_model = loadModelImpl(urdf_path)
@@ -35,7 +36,7 @@ class QuadrupedDynamics(FloatingBaseDynamics):
         self.base_cost = self.add_expr(name="base_cost", expr=self.get_base_cost())
         self.joint_cost = self.add_expr(name="joint_cost", expr=self.get_joint_cost())
         self.acc_cost = self.add_expr(name="acc_cost", expr=self.get_acc_cost())
-
+        self.torque_limit = torque_limit
     @property
     def pin_model(self):
         return self.__raw_model
@@ -106,9 +107,10 @@ class QuadrupedDynamics(FloatingBaseDynamics):
         return feet_pos
 
     def setup(self, problem: ProblemFormulation):
-        for f in self.feet:
-            f.setup(problem)
         super().setup(problem)
+        if self.torque_limit:
+            self.add_torque_limit(problem)
+
         problem.add_cost(self.base_cost, terminal=True)
         problem.add_cost(self.joint_cost, terminal=True)
         problem.add_cost(self.acc_cost)
