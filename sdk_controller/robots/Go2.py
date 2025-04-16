@@ -2,6 +2,7 @@ import numpy as np
 
 
 ROBOT_NAME = "go2"
+OBJECT_NAME = "Go2with6markers"
 
 STAND_UP_JOINT_POS = np.array([
     0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763,
