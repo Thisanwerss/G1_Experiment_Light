@@ -70,7 +70,7 @@ WORKDIR /home/$USERNAME/workspace/
 ENV ROS_DISTRO=humble
 
 # Install ROS 2 dependencies
-RUN sudo apt-get update && sudo apt-get install -y \
+RUN sudo apt-get update && sudo apt-get upgrade -y && sudo apt-get install -y \
     curl \
     gnupg2 \
     lsb-release \
@@ -90,6 +90,7 @@ RUN sudo apt-get update && sudo apt-get install -y \
     ros-$ROS_DISTRO-rosidl-generator-dds-idl \
     ros-$ROS_DISTRO-joint-state-publisher-gui \
     ros-$ROS_DISTRO-plotjuggler-ros \
+    ros-dev-tools \
     && sudo rosdep init \
     && rosdep update
 
@@ -157,6 +158,8 @@ RUN /bin/bash -c "source /home/$USERNAME/.venv/bin/activate && \
     pygame==2.6.1 \
     tqdm==4.67.1 \
     robot_descriptions==1.14 \
+    psutil==7.0.0 \
+    pyvicon-datastream \
     "
 
 # Clone and install unitree_ros2 + CycloneDDS
