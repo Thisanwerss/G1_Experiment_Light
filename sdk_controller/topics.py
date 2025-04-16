@@ -1,0 +1,5 @@
+TOPIC_HIGHSTATE = "rt/sportmodestate"
+TOPIC_LOWCMD = "rt/lowcmd"
+TOPIC_LOWSTATE = "rt/lowstate"
+TOPIC_HIGHSTATE = "rt/sportmodestate"
+TOPIC_WIRELESS_CONTROLLER = "rt/wirelesscontroller"
