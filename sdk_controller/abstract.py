@@ -3,6 +3,8 @@ import numpy as np
 import mujoco
 from abc import ABC, abstractmethod
 
+from sdk_controller.topics import  TOPIC_HIGHSTATE, TOPIC_LOWCMD, TOPIC_LOWSTATE, TOPIC_HIGHSTATE, TOPIC_WIRELESS_CONTROLLER
+from sdk_controller.joystick import KEY_MAP
 from mj_pin.utils import get_robot_description, mj_joint_name2act_id, mj_joint_name2dof
 
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
@@ -23,11 +25,6 @@ except:
     from safety import SafetyLayer
     
 
-TOPIC_LOWCMD = "rt/lowcmd"
-TOPIC_LOWSTATE = "rt/lowstate"
-TOPIC_HIGHSTATE = "rt/sportmodestate"
-TOPIC_WIRELESS_CONTROLLER = "rt/wirelesscontroller"
-
 class SDKControllerBase(ABC):
     def __init__(self):
         super().__init__()
@@ -37,25 +34,7 @@ class SDKControllerBase(ABC):
         self.last_wireless = None
         
         # joystick
-        self.key_map = {
-            "R1": 0,
-            "L1": 1,
-            "start": 2,
-            "select": 3,
-            "R2": 4,
-            "L2": 5,
-            "F1": 6,
-            "F2": 7,
-            "A": 8,
-            "B": 9,
-            "X": 10,
-            "Y": 11,
-            "up": 12,
-            "right": 13,
-            "down": 14,
-            "left": 15,
-        }
-        self.key_map = {v: k for k,v in self.key_map.items()}
+        self.key_map = {v: k for k,v in KEY_MAP.items()}
         
         self.crc = CRC()
         self.cmd = unitree_go_msg_dds__LowCmd_()
@@ -73,13 +52,13 @@ class SDKControllerBase(ABC):
             self.cmd.motor_cmd[i].tau = 0.0
         
         # Create a publisher to publish the data defined in UserData class
-        self.pub = ChannelPublisher("rt/lowcmd", LowCmd_)
+        self.pub = ChannelPublisher(TOPIC_LOWCMD, LowCmd_)
         self.pub.Init()
         
         # Create a subscriber to subscribe to lowstate data
-        low_state_sub = ChannelSubscriber("rt/lowstate", LowState_)
-        hight_state_sub = ChannelSubscriber("rt/sportmodestate", SportModeState_)
-        joystick_sub = ChannelSubscriber("rt/wirelesscontroller", WirelessController_)
+        low_state_sub = ChannelSubscriber(TOPIC_LOWSTATE, LowState_)
+        hight_state_sub = ChannelSubscriber(TOPIC_HIGHSTATE, SportModeState_)
+        joystick_sub = ChannelSubscriber(TOPIC_WIRELESS_CONTROLLER, WirelessController_)
         low_state_sub.Init(self.low_state_handler, 10)
         hight_state_sub.Init(self.high_state_handler, 10)
         joystick_sub.Init(self.wireless_handler, 1)
@@ -97,7 +76,7 @@ class SDKControllerBase(ABC):
             t += sleep    
             time.sleep(sleep)
             
-        raise ValueError("No msg received.")
+        raise TimeoutError("No msg received.")
             
     def wireless_handler(self, msg : WirelessController_):
         self.last_wireless = msg
@@ -116,9 +95,13 @@ class SDKControllerBase(ABC):
         
 class SDKController(SDKControllerBase):
     def __init__(self,
+                 simulate : bool,
                  robot_config,
                  xml_path : str = ""
-                 ):        
+                 ):
+        self.simulate = simulate
+        self.use_angular_from_highstate = not self.simulate
+        
         self.robot_config = robot_config
         # Init robot interface, init joint mapping
         if not xml_path:
@@ -154,7 +137,10 @@ class SDKController(SDKControllerBase):
 
     def high_state_handler(self, msg):
         super().high_state_handler(msg)
-        self.update_q_v_from_highstate()
+        if self.simulate:
+            self.update_q_v_from_highstate_simulation()
+        else:
+            self.update_q_v_from_highstate(use_angular=True)
         
     def low_state_handler(self, msg):
         super().low_state_handler(msg)
@@ -217,10 +203,11 @@ class SDKController(SDKControllerBase):
 
     def update_q_v_from_lowstate(self):
         """Extracts q (position) and v (velocity) from a Unitree LowState_ message."""       
-        # Base orientation (quaternion w, x, y, z)
-        self._q[3:7] = self.last_low_state.imu_state.quaternion  # Quaternion order: w, x, y, z
-        # Base velocity (linear and angular) - extracted from IMU
-        self._v[3:6] = self.last_low_state.imu_state.gyroscope  # Angular velocity from IMU
+        if not self.use_angular_from_highstate:
+            # Base orientation (quaternion w, x, y, z)
+            self._q[3:7] = self.last_low_state.imu_state.quaternion  # Quaternion order: w, x, y, z
+            # Base velocity (linear and angular) - extracted from IMU
+            self._v[3:6] = self.last_low_state.imu_state.gyroscope  # Angular velocity from IMU
 
         # Joint positions and velocities
         for i, motor in enumerate(self.last_low_state.motor_state[:self.nu]):
@@ -228,7 +215,7 @@ class SDKController(SDKControllerBase):
             self._q[dof + self.off] = motor.q  # Joint position
             self._v[dof] = motor.dq  # Joint velocity
 
-    def update_q_v_from_highstate(self):
+    def update_q_v_from_highstate_simulation(self):
         """Converts IMU velocity to base frame velocity."""
         if self._q is None or self._v is None:
             return
@@ -247,6 +234,16 @@ class SDKController(SDKControllerBase):
         # Linear velocity. Same angular velocity
         self._v[0:3] = self.last_high_state.velocity + np.cross(R_B_W @ self._v[3:6], self._q[0:3] - self.last_high_state.position)
 
+    def update_q_v_from_highstate(self):
+        """Extracts q (position) and v (velocity) from a Unitree HighState_ message."""
+        # Base position
+        self._q[0:3] = self.last_high_state.position
+        self._v[0:3] = self.last_high_state.velocity
+        if self.use_angular_from_highstate:
+            # Base orientation (quaternion w, x, y, z)
+            self._q[3:7] = self.last_high_state.imu_state.quaternion
+            self._v[3:6] = self.last_high_state.imu_state.gyroscope
+        
     def send_motor_command(self, time : float):
 
         # Stand down

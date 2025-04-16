@@ -21,6 +21,7 @@ from unitree_sdk2py.utils.crc import CRC
 
 class MPC_SDK(SDKController):
     def __init__(self,
+                 simulate : bool,
                  mpc : LocomotionMPC,
                  robot_config,
                  xml_path = "",
@@ -33,7 +34,7 @@ class MPC_SDK(SDKController):
         self.w_max = w_max
         self.v_des = np.zeros(3)
         self.w_des = 0.
-        super().__init__(robot_config, xml_path)
+        super().__init__(simulate, robot_config, xml_path)
 
     def wireless_handler(self, msg : WirelessController_):
         super().wireless_handler(msg)
@@ -62,15 +63,30 @@ class MPC_SDK(SDKController):
         
 input("Press enter to start")
 runing_time = 0.0
+
+VICON_TRACKER_IP = "192.168.123.100:801"
        
 if __name__ == '__main__':
     from sdk_controller.robots import Go2
-
+    from sdk_controller.joystick import JoystickPublisher
+    from sdk_controller.vicon_publisher import ViconHighStatePublisher
+    
+    
+    
     if len(sys.argv) <2:
         ChannelFactoryInitialize(1, "lo")
+        joystick = JoystickPublisher(device_id=0, js_type="xbox")
+        simulate = True
     else:
         ChannelFactoryInitialize(0, sys.argv[1])
-
+        joystick = JoystickPublisher(device_id=0, js_type="xbox")
+        vicon = ViconHighStatePublisher(
+            vicon_ip=VICON_TRACKER_IP,
+            object_name=Go2.OBJECT_NAME,
+            publish_freq=2*Go2.CONTROL_FREQ,
+        )
+        simulate = False
+    
     dt = 1 / Go2.CONTROL_FREQ
     robot_desc = get_robot_description(Go2.ROBOT_NAME)
     feet_frame_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
@@ -92,7 +108,7 @@ if __name__ == '__main__':
         solve_async=True,
         )
     
-    sdk_controller = MPC_SDK(mpc, Go2)
+    sdk_controller = MPC_SDK(simulate, mpc, Go2)
 
     try:
         while True:
