@@ -39,7 +39,7 @@ class Go2TrotCost(MPCCostConfig):
     ], 1)
 
     # Joint running cost to nominal position and vel (hip, shoulder, elbow)
-    W_joint: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET + [0.1] * len(HIP_SHOULDER_ELBOW_SCALE) * N_FEET, 50.)
+    W_joint: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET + [0.1] * len(HIP_SHOULDER_ELBOW_SCALE) * N_FEET, 25.)
 
     # Joint terminal cost to nominal position and vel (hip, shoulder, elbow)
     W_e_joint: np.ndarray = __init_np(HIP_SHOULDER_ELBOW_SCALE * N_FEET  + [0.1] * len(HIP_SHOULDER_ELBOW_SCALE) * N_FEET, 1.)

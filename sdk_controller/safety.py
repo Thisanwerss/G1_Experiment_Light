@@ -17,7 +17,7 @@ class SafetyLayer:
         self.joint_limits = {}
         self.torque_limits = {}
         self.base_orientation_limit = 35 * np.pi / 180.
-        self.scale_joint_limit = 1.
+        self.scale_joint_limit = 0.95
         self.scale_torque_limit = 0.9
 
         for id in range(mj_model.njnt):

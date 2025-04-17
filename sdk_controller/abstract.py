@@ -64,6 +64,7 @@ class SDKControllerBase(ABC):
         joystick_sub.Init(self.wireless_handler, 1)
         
         self.wait_subscriber()
+        print("Controller ready!")
         
     def wait_subscriber(self) -> bool:
         timeout = 5.
@@ -140,7 +141,7 @@ class SDKController(SDKControllerBase):
         if self.simulate:
             self.update_q_v_from_highstate_simulation()
         else:
-            self.update_q_v_from_highstate(use_angular=True)
+            self.update_q_v_from_highstate()
         
     def low_state_handler(self, msg):
         super().low_state_handler(msg)

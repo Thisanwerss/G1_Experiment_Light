@@ -116,6 +116,7 @@ class LocomotionMPC(PinController):
         self.solve_async : bool = solve_async
         self.compute_timings : bool = compute_timings
         self.interactive_goal : bool = interactive_goal
+        self.executor = ThreadPoolExecutor(max_workers=1)  # One thread for asynchronous optimization
 
         # Init variables
         self.reset(reset_solver=False)
@@ -161,6 +162,12 @@ class LocomotionMPC(PinController):
         """
         if reset_solver:
             self.solver.reset()
+            
+        # Contact planner
+        q0, v0 = np.zeros(self.nq), np.zeros(self.nv)
+        q0[-self.nu:] = self.joint_ref
+        self.solver.dyn.update_pin(q0, v0)
+        
         
         # Counter variables and flags
         self.first_solve : bool = True
@@ -198,8 +205,15 @@ class LocomotionMPC(PinController):
         self.timings = defaultdict(list)
 
         # Multiprocessing
-        self.executor = ThreadPoolExecutor(max_workers=1)  # One thread for asynchronous optimization
+        
         self.optimize_future: Future = Future()                # Store the future result of optimize
+        if hasattr(self, "executor"):
+            if self.optimize_future.running():
+                self.executor.shutdown(wait=True, cancel_futures=True)
+                time.sleep(0.05)
+                self.executor.shutdown(wait=False, cancel_futures=False)
+            self.executor = ThreadPoolExecutor(max_workers=1)  # One thread for asynchronous optimization
+            
         self.plan_submitted = False                        # Flag to indicate if a new plan is ready
 
         # Interactive goal (keyboard)
@@ -281,7 +295,7 @@ class LocomotionMPC(PinController):
         else:
             pos_ref = self.base_ref_vel_tracking[:3]
             yaw_ref = self.base_ref_vel_tracking[3]
-        yaw_ref = self.base_ref_vel_tracking[3]
+        yaw_ref = np.round(q[3], 2)
         pos_ref = np.round(q[:3], 2)
 
         base_ref_e[:2] = pos_ref[:2] + v_des_glob[:2] * t_horizon
@@ -497,7 +511,7 @@ class LocomotionMPC(PinController):
         return q_full_traj_arr
     
     def set_convergence_on_first_iter(self):
-        N_SQP_FIRST = 30
+        N_SQP_FIRST = 40
         if self.first_solve:
             self.solver.set_max_iter(N_SQP_FIRST)
             self.solver.set_nlp_tol(self.solver.config_opt.nlp_tol / 10.)
@@ -722,5 +736,8 @@ class LocomotionMPC(PinController):
         print_timings(self.solver.timings)
 
     def __del__(self):
-        if self.executor: self.executor.shutdown(wait=False, cancel_futures=self.optimize_future.running())
+        if hasattr(self, "executor"):
+            self.executor.shutdown(wait=True, cancel_futures=True)
+            time.sleep(0.1)
+            self.executor.shutdown(wait=False, cancel_futures=self.optimize_future.running())
         if self.velocity_goal: self.velocity_goal._stop_update_thread()

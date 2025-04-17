@@ -1,21 +1,14 @@
 import time
 import sys
 import numpy as np
-import mujoco
+
 from mpc_controller.mpc import LocomotionMPC
 from mpc_controller.config.quadruped.utils import get_quadruped_config
 from sdk_controller.abstract import SDKController
-from mj_pin.utils import get_robot_description, mj_joint_name2act_id, mj_joint_name2dof
+from mj_pin.utils import get_robot_description
 
-from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
-from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
-from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_
-from unitree_sdk2py.idl.default import unitree_go_msg_dds__SportModeState_
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__WirelessController_
-from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
-from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
-from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
 from unitree_sdk2py.utils.crc import CRC
 
@@ -28,7 +21,7 @@ class MPC_SDK(SDKController):
                  v_max=0.5,
                  w_max=0.5):
         self.mpc = mpc
-        self.mpc.scale_joint = np.repeat([1.2, 1.1, 1], 4)
+        self.mpc.scale_joint = np.repeat([1.4, 1.2, 1], 4)
 
         self.v_max = v_max
         self.w_max = w_max
@@ -45,16 +38,28 @@ class MPC_SDK(SDKController):
             
     def update_motor_cmd(self, time):
         torques_ff = self.mpc._compute_torques_ff(time, self._q, self._v)
-        self.mpc.tau_full.append(torques_ff)
-        step = self.mpc.plan_step + 2
-        for i, tau in enumerate(torques_ff, start=6):
-            i_act = self.joint_dof2act_id[i]
-            self.cmd.motor_cmd[i_act].q = self.mpc.q_plan[step, i]
-            self.cmd.motor_cmd[i_act].kp = self.mpc.scale_joint[i-6] * self.robot_config.Kp if not self.mpc.first_solve else 50.
-            self.cmd.motor_cmd[i_act].dq = self.mpc.v_plan[step, i]
-            self.cmd.motor_cmd[i_act].kd = self.mpc.scale_joint[i-6] * self.robot_config.Kd if not self.mpc.first_solve else 3.5
-            max_tau = self.safety.torque_limits[i_act]
-            self.cmd.motor_cmd[i_act].tau = np.clip(tau, -max_tau, max_tau)
+        if self.mpc.first_solve:
+            # Stand up
+            phase = 1.
+            for i in range(self.nu):
+                self.cmd.motor_cmd[i].q = phase * self.robot_config.STAND_UP_JOINT_POS[i] + (
+                    1 - phase) * self.robot_config.STAND_DOWN_JOINT_POS[i]
+                self.cmd.motor_cmd[i].kp = phase * 50.0 + (1 - phase) * 20.0
+                self.cmd.motor_cmd[i].dq = 0.0
+                self.cmd.motor_cmd[i].kd = 3.5
+                self.cmd.motor_cmd[i].tau = 0.0
+        else:
+            self.mpc.tau_full.append(torques_ff)
+            step = self.mpc.plan_step + 2
+            scale = 1. if self.simulate else self.robot_config.scale_gains
+            for i, tau in enumerate(torques_ff, start=6):
+                i_act = self.joint_dof2act_id[i]
+                self.cmd.motor_cmd[i_act].q = self.mpc.q_plan[step, i]
+                self.cmd.motor_cmd[i_act].kp = self.mpc.scale_joint[i-6] * self.robot_config.Kp * scale
+                self.cmd.motor_cmd[i_act].dq = self.mpc.v_plan[step, i]
+                self.cmd.motor_cmd[i_act].kd = self.mpc.scale_joint[i-6] * self.robot_config.Kd * scale
+                max_tau = self.safety.torque_limits[i_act]
+                self.cmd.motor_cmd[i_act].tau = np.clip(tau, -max_tau, max_tau)
 
     def reset_controller(self):
         print("reset controller")
@@ -64,7 +69,7 @@ class MPC_SDK(SDKController):
 input("Press enter to start")
 runing_time = 0.0
 
-VICON_TRACKER_IP = "192.168.123.100:801"
+VICON_IP = "192.168.123.100:801"
        
 if __name__ == '__main__':
     from sdk_controller.robots import Go2
@@ -75,15 +80,16 @@ if __name__ == '__main__':
     
     if len(sys.argv) <2:
         ChannelFactoryInitialize(1, "lo")
-        joystick = JoystickPublisher(device_id=0, js_type="xbox")
         simulate = True
+        
     else:
         ChannelFactoryInitialize(0, sys.argv[1])
+        
         joystick = JoystickPublisher(device_id=0, js_type="xbox")
         vicon = ViconHighStatePublisher(
-            vicon_ip=VICON_TRACKER_IP,
+            vicon_ip=VICON_IP,
             object_name=Go2.OBJECT_NAME,
-            publish_freq=2*Go2.CONTROL_FREQ,
+            publish_freq=Go2.CONTROL_FREQ,
         )
         simulate = False
     

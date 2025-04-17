@@ -172,7 +172,6 @@ class JoystickPublisher:
         while t < timout:
             if self.wireless_controller.keys != 0:
                 key_id = int(np.log2(self.wireless_controller.keys))
-                print(start_button_id, key_id)
                 if key_id == start_button_id:
                     print("Joystic started!")
                     return
