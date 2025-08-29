@@ -1,0 +1,22 @@
+<mujoco model="Unitree G1 scene">
+  <!-- 包含 G1 机器人模型 -->
+  <include file="g1_lab.xml"/>
+  
+  <!-- 添加地面和光照 -->
+  <visual>
+    <global offwidth="1920" offheight="1080"/>
+  </visual>
+  
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1=".1 .2 .3" rgb2=".2 .3 .4" width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="1 1" texuniform="true" reflectance=".2"/>
+  </asset>
+  
+  <worldbody>
+    <!-- 添加光源 -->
+    <light name="spotlight" mode="targetbodycom" target="pelvis" diffuse=".8 .8 .8" specular="0.3 0.3 0.3" pos="0 -6 6" cutoff="30"/>
+    
+    <!-- 添加地面 -->
+    <geom name="floor" type="plane" size="20 20 .1" material="grid" condim="3" contype="1" conaffinity="1"/>
+  </worldbody>
+</mujoco>

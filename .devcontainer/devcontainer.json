@@ -44,7 +44,9 @@
     ],
     "mounts": [
         "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached",
-        "source=/dev,destination=/dev,type=bind"
+        "source=/dev,destination=/dev,type=bind",
+        "source=${localWorkspaceFolder}/Text2Motion,target=/home/atari/workspace/Text2Motion,type=bind",
+        "source=${localWorkspaceFolder}/debug_toolbox,target=/home/atari/workspace/debug_toolbox,type=bind"
     ],
     // Post create command - dependency check and permission for read write for workspace folder
     // "postStartCommand": "",

@@ -1,0 +1,1 @@
+/home/atari/workspace/build/vicon_receiver/rosidl_cmake/rosidl_cmake_export_typesupport_targets-extras.cmake

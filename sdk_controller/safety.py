@@ -3,12 +3,13 @@ import mujoco
 from mj_pin.utils import mj_joint_name2act_id, mj_joint_name2dof
 
 class SafetyLayer:
-    def __init__(self, mj_model):
+    def __init__(self, mj_model, conservative_safety: bool = False):
         """
         Safety controller to enforce kinematic and torque limits.
 
         Args:
             mj_model : MuJoCo model with joint and ctrl limits.
+            conservative_safety: Whether to use more conservative safety limits.
         """
         joint_name2act_id = mj_joint_name2act_id(mj_model)
         joint_name2dof = mj_joint_name2dof(mj_model)
@@ -16,8 +17,14 @@ class SafetyLayer:
         self.joint_dof2act_id = {v : k for k, v in self.joint_act_id2dof.items()}
         self.joint_limits = {}
         self.torque_limits = {}
-        self.base_orientation_limit = 35 * np.pi / 180.
-        self.scale_joint_limit = 0.95
+        
+        if conservative_safety:
+            self.base_orientation_limit = 25 * np.pi / 180. # 25 degrees
+            self.scale_joint_limit = 0.90 # 90% of physical limit
+        else:
+            self.base_orientation_limit = 35 * np.pi / 180.
+            self.scale_joint_limit = 0.95
+
         self.scale_torque_limit = 0.9
 
         for id in range(mj_model.njnt):
@@ -40,7 +47,8 @@ class SafetyLayer:
         
         for joint_id, (q_min, q_max) in self.joint_limits.items():
             if not (q_min < joint_positions[joint_id] < q_max):
-                print(f"Warning: Joint {joint_id} out of range! ({joint_positions[joint_id]})")
+                dof_name = mj_model.joint(mj_model.dof_jntid[joint_id]).name if joint_id < mj_model.nv else f"Dof {joint_id}"
+                print(f"❌❌❌ [安全层] 关节物理极限超限! 关节: {dof_name} | 位置: {joint_positions[joint_id]:.2f} (范围: {q_min:.2f} ~ {q_max:.2f}) ❌❌❌")
                 return False
         return True
 
@@ -51,7 +59,8 @@ class SafetyLayer:
         
         for act_id, max_torque in self.torque_limits.items():
             if abs(torques[act_id]) > max_torque:
-                print(f"Warning: Joint {act_id} torque limit exceeded!")
+                act_name = mj_model.actuator(act_id).name
+                print(f"❌❌❌ [安全层] 预估力矩超限! 执行器: {act_name} | 力矩: {abs(torques[act_id]):.1f} > 上限: {max_torque:.1f} Nm ❌❌❌")
                 return False
         return True
     
@@ -65,7 +74,7 @@ class SafetyLayer:
         pitch = np.arcsin(2 * (x * z - y))
         
         if abs(roll) > self.base_orientation_limit or abs(pitch) > self.base_orientation_limit:
-            print("Warning: Base orientation limit exceeded!")
+            print(f"❌❌❌ [安全层] 机器人基座倾角过大! Roll: {roll*180/np.pi:.1f}°, Pitch: {pitch*180/np.pi:.1f}° (上限: {self.base_orientation_limit*180/np.pi:.1f}°) ❌❌❌")
             return False
         return True
 
@@ -74,6 +83,6 @@ class SafetyLayer:
         if not (self.check_joint_limits(joint_positions) and 
                 self.check_torque_limits(torques) and
                 self.check_base_orientation(base_quaternion)):
-            print("Safety violation detected! Setting torques to zero.")
+            print("--- 触发安全保护! 切换至阻尼模式 ---")
             return False
         return True

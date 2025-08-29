@@ -18,7 +18,7 @@ from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
 from unitree_sdk2py.utils.crc import CRC
-
+# Using go-series DDS, designed for Go2 robot
 try:
     from sdk_controller.safety import SafetyLayer
 except:

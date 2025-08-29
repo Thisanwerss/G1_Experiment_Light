@@ -2,7 +2,7 @@ import subprocess
 import time
 import os
 import psutil
-
+# Using go-series DDS, designed for Go2 robot
 def kill_other_python3():
     current_pid = os.getpid()
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
@@ -18,7 +18,7 @@ def kill_other_python3():
             continue
         
 def run_unitree_mujoco_simulation():
-    path = "/home/atari/unitree_mujoco/simulate_python/"
+    path = "external_deps/unitree_mujoco/simulate_python/"
     script = "unitree_mujoco.py"
 
     try:

@@ -1,0 +1,14 @@
+source;share/vicon_receiver/hook/cmake_prefix_path.ps1
+source;share/vicon_receiver/hook/cmake_prefix_path.dsv
+source;share/vicon_receiver/hook/cmake_prefix_path.sh
+source;share/vicon_receiver/hook/ld_library_path_lib.ps1
+source;share/vicon_receiver/hook/ld_library_path_lib.dsv
+source;share/vicon_receiver/hook/ld_library_path_lib.sh
+source;share/vicon_receiver/hook/pythonpath.ps1
+source;share/vicon_receiver/hook/pythonpath.dsv
+source;share/vicon_receiver/hook/pythonpath.sh
+source;share/vicon_receiver/local_setup.bash
+source;share/vicon_receiver/local_setup.dsv
+source;share/vicon_receiver/local_setup.ps1
+source;share/vicon_receiver/local_setup.sh
+source;share/vicon_receiver/local_setup.zsh

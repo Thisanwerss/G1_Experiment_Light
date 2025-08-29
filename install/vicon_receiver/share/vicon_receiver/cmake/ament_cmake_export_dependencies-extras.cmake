@@ -1,0 +1,1 @@
+/home/atari/workspace/build/vicon_receiver/ament_cmake_export_dependencies/ament_cmake_export_dependencies-extras.cmake

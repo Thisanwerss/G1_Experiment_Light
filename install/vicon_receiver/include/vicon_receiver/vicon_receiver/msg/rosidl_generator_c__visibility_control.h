@@ -1,0 +1,1 @@
+/home/atari/workspace/build/vicon_receiver/rosidl_generator_c/vicon_receiver/msg/rosidl_generator_c__visibility_control.h
