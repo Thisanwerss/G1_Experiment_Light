@@ -9,7 +9,7 @@ ZeroMQ-DDS 通信桥接器
 3. CEM+真实机器人: python zmq_dds_bridge.py --channel <network_interface>
 ros2 launch vicon_receiver client.launch.py 
 
-
+ref:<key qpos='2.21501 1.05997 1.01669 0.930791 0.00339909 -0.0133212 -0.365294 0.0968964 -0.12121 0.0411549 0.0833635 -0.160106 0.0807926 0.0054431 -0.0883059 0.122414 0.369962 -0.381041 0.0785379 -0.0640063 -0.00810865 -0.209113 0.165738 0.0168338 0.198281 -0.195008 0.0899386 0.0514546 0.677822 1.7251 -1.44205 -1.90577 -1.54437 -1.92981 -0.0127106 0.0960897 -0.00151768 0.236564 -0.139678 -0.51143 -0.0517731 -0.0280968 -1.00421 -1.69945 1.52882 1.8316 1.55194 1.90963 0 0 1 1 0 0 0'/>
 
 """
 
@@ -23,6 +23,21 @@ import signal
 import sys
 import numpy as np
 import zmq
+import json
+
+# --- 全局配置加载 ---
+try:
+    with open("global_config.json", "r") as f:
+        GLOBAL_CONFIG = json.load(f)
+    VICON_Z_OFFSET = GLOBAL_CONFIG.get("vicon_z_offset", 0.0)
+    print(f"✅ 从 global_config.json 加载配置, VICON_Z_OFFSET={VICON_Z_OFFSET}")
+except FileNotFoundError:
+    print("⚠️ global_config.json 未找到, 使用默认值。")
+    VICON_Z_OFFSET = 0.0
+except json.JSONDecodeError:
+    print("❌ global_config.json 解析失败, 使用默认值。")
+    VICON_Z_OFFSET = 0.0
+
 
 # 仿真相关导入
 import mujoco
@@ -86,6 +101,7 @@ try:
                 self.prev_prev_p = self.prev_p
                 self.prev_p = self.p
                 self.p = np.array([msg.x_trans, msg.y_trans, msg.z_trans]) / 1000.0
+                self.p[2] += VICON_Z_OFFSET # 应用Z轴偏移
 
                 # 四元数更新 (w, x, y, z)
                 self.prev_prev_q = self.prev_q

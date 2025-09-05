@@ -23,6 +23,28 @@ IP_ADDRESS="192.168.123.222"
 CIDR="24"
 FULL_IP="${IP_ADDRESS}/${CIDR}"
 
+# --- Environment Setup ---
+# Get the absolute path of the script's directory to reliably source files
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+echo "Sourcing environment..."
+
+# Source ROS2 if available
+if [ -f "/opt/ros/humble/setup.bash" ]; then
+    echo "   - Sourcing ROS2 Humble: /opt/ros/humble/setup.bash"
+    source /opt/ros/humble/setup.bash
+else
+    echo "   - Warning: ROS2 setup not found."
+fi
+
+# Source local ROS2 workspace if it exists
+if [ -f "${SCRIPT_DIR}/install/setup.bash" ]; then
+    echo "   - Sourcing local ROS2 workspace: ${SCRIPT_DIR}/install/setup.bash"
+    source "${SCRIPT_DIR}/install/setup.bash"
+else
+    echo "   - Warning: Local ROS2 workspace overlay not found."
+fi
+echo "------------------------------------------------------"
+
 echo "🤖 Starting Robot Network Configuration..."
 echo "=========================================="
 echo "Target Interface: ${INTERFACE}"

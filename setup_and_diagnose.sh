@@ -27,6 +27,34 @@ STATIC_IP="192.168.123.222/24"
 ROBOT_IP="192.168.123.161"
 VICON_ROS_TOPIC="/vicon/G1/G1"
 
+# --- Environment Setup ---
+# Source ROS2 and Python environments to make tools available
+# Get the absolute path of the script's directory to reliably source files
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+echo "STEP 0: Sourcing environment from script location: ${SCRIPT_DIR}"
+
+# Source ROS2 if available
+if [ -f "/opt/ros/humble/setup.bash" ]; then
+    echo "   - Sourcing ROS2 Humble: /opt/ros/humble/setup.bash"
+    source /opt/ros/humble/setup.bash
+else
+    echo "   - Warning: ROS2 setup not found. 'ros2' commands may fail."
+fi
+
+# Source local ROS2 workspace if it exists
+if [ -f "${SCRIPT_DIR}/install/setup.bash" ]; then
+    echo "   - Sourcing local ROS2 workspace: ${SCRIPT_DIR}/install/setup.bash"
+    source "${SCRIPT_DIR}/install/setup.bash"
+else
+    echo "   - Warning: Local ROS2 workspace overlay not found."
+fi
+
+# Activate local Python virtual environment if it exists
+# We will not source the venv directly as it's unreliable with sudo.
+# Instead, we will call the python executable from within the venv directly.
+echo "------------------------------------------------------"
+
 # --- Main Script ---
 
 # 1. Check for root privileges
@@ -57,6 +85,14 @@ ip addr add "${STATIC_IP}" dev "${INTERFACE}"
 echo "   - Activating interface..."
 ip link set "${INTERFACE}" up
 
+echo "   - Waiting 2s for network link to establish..."
+sleep 2
+
+if [[ "$(cat /sys/class/net/${INTERFACE}/operstate)" != "up" ]]; then
+    echo "⚠️  Warning: Network link for '${INTERFACE}' is not active (state is DOWN)."
+    echo "   Please ensure the network cable is properly connected to the robot/switch."
+fi
+
 echo "✅ Network configured successfully. Current IP:"
 ip -4 -br addr show "${INTERFACE}"
 echo "------------------------------------------------------"
@@ -78,16 +114,7 @@ echo "------------------------------------------------------"
 echo "STEP 3: Performing diagnostic self-checks..."
 ALL_CHECKS_PASSED=true
 
-# Check 3.1: Robot Ping
-echo -n "   - Checking Robot Connectivity (ping ${ROBOT_IP})... "
-if ping -c 3 -W 2 "$ROBOT_IP" &> /dev/null; then
-    echo "✅ SUCCESS"
-else
-    echo "❌ FAILED"
-    ALL_CHECKS_PASSED=false
-fi
-
-# Check 3.2: Vicon ROS Topic
+# Check 3.1: Vicon ROS Topic
 echo -n "   - Checking Vicon ROS2 Topic (${VICON_ROS_TOPIC})... "
 # Use a timeout to prevent the script from getting stuck if the topic isn't publishing
 if timeout 5s ros2 topic echo --once "$VICON_ROS_TOPIC" &> /dev/null; then
@@ -97,10 +124,17 @@ else
      ALL_CHECKS_PASSED=false
 fi
 
-# Check 3.3: Robot DDS Communication
-echo -n "   - Checking Robot DDS Communication (rt/lowstate)... "
+# Check 3.2: Robot DDS Communication (This replaces the unreliable ping check)
+PYTHON_EXEC="python3" # Default to system python
+if [ -f "${SCRIPT_DIR}/.venv/bin/python3" ]; then
+    PYTHON_EXEC="${SCRIPT_DIR}/.venv/bin/python3"
+    echo -n "   - Checking Robot Connectivity (via DDS using .venv python)... "
+else
+    echo -n "   - Checking Robot Connectivity (via DDS using system python)... "
+fi
+
 # Use an embedded Python script to check for DDS messages
-if python3 - "$INTERFACE" <<'EOF'
+if "$PYTHON_EXEC" - "$INTERFACE" <<'EOF'
 import sys
 import time
 import threading
