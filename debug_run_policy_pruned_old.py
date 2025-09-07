@@ -28,25 +28,9 @@ import jax.numpy as jnp
 from mujoco import mjx
 import pytorch_lightning as pl
 import zmq
-from scipy.spatial.transform import Rotation as R
 
 from hydrax.algs import CEM
 from hydrax.tasks.humanoid_standonly import HumanoidStand
-
-
-# --- Utility Functions ---
-def quat_to_yaw(quat_wxyz):
-    """Convert a quaternion (w, x, y, z) to a yaw angle."""
-    # SciPy Rotation expects (x, y, z, w)
-    r = R.from_quat([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]])
-    return r.as_euler('xyz', degrees=False)[2]
-
-def euler_to_quat(roll, pitch, yaw):
-    """Convert roll, pitch, yaw angles to a quaternion (w, x, y, z)."""
-    r = R.from_euler('xyz', [roll, pitch, yaw], degrees=False)
-    # SciPy Rotation returns (x, y, z, w)
-    quat_xyzw = r.as_quat()
-    return np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
 
 
 class MLPRegressor(pl.LightningModule):
@@ -153,7 +137,6 @@ class AsyncControllerService:
         frequency: float = 50.0,
         zmq_state_port: int = 5555,
         zmq_ctrl_port: int = 5556,
-        seeref: bool = False,
         # CEM parameters
         num_samples: int = 500,
         num_elites: int = 20,
@@ -161,8 +144,7 @@ class AsyncControllerService:
         sigma_min: float = 0.05,
         plan_horizon: float = 0.5,
         num_knots: int = 4,
-        iterations: int = 1,
-        **kwargs
+        iterations: int = 1
     ):
         """Initialize asynchronous control service"""
         self.device = torch.device(device)
@@ -170,30 +152,21 @@ class AsyncControllerService:
         self.replan_period = 1.0 / frequency
         self.zmq_state_port = zmq_state_port
         self.zmq_ctrl_port = zmq_ctrl_port
-        self.seeref = seeref
-        self.alignment_mode = kwargs.get("alignment_mode", "reference")
         
         print(f"🚀 Initializing asynchronous control computation service")
         print(f"   Device: {self.device}")
         print(f"   Control frequency: {frequency} Hz")
         print(f"   State port: {zmq_state_port} (Sim PUSH → Control PULL)")
         print(f"   Control port: {zmq_ctrl_port} (Control PUSH → Sim PULL)")
-        print(f"   Alignment mode: {self.alignment_mode}")
         
-        # 1. Set up task and model (needed for both modes to access reference trajectory)
-        print("🤖 Setting up robot task...")
-        self.task = HumanoidStand()
-        self.mj_model = self.task.mj_model
-
-        if self.seeref:
-            # For seeref mode, we only need the ZMQ setup. No model loading or JIT.
-            self._setup_zmq_only()
-            return
-
-        # --- Full Initialization for Control Mode ---
         # 1. Load PyTorch network
         print("📦 Loading neural network...")
         self.net = load_model(model_path, self.device)
+        
+        # 2. Set up task and model
+        print("🤖 Setting up robot task...")
+        self.task = HumanoidStand()
+        self.mj_model = self.task.mj_model
         
         # Configure MuJoCo parameters (same as run_policy.py)
         self.mj_model.opt.timestep = 0.01
@@ -203,7 +176,7 @@ class AsyncControllerService:
         self.mj_model.opt.o_solimp = [0.0, 0.95, 0.01, 0.5, 2]
         self.mj_model.opt.enableflags = mujoco.mjtEnableBit.mjENBL_OVERRIDE
         
-        # 2. Set up CEM controller
+        # 3. Set up CEM controller
         print("🧠 Setting up CEM controller...")
         self.ctrl = CEM(
             self.task,
@@ -278,6 +251,8 @@ class AsyncControllerService:
         self.poller = zmq.Poller()
         self.poller.register(self.socket_state, zmq.POLLIN)
         
+        print(f"✅ Asynchronous ZeroMQ server started")
+        
         # 9. Preallocate buffer to avoid repeated allocation
         self.controls_buffer = np.zeros((self.sim_steps_per_replan, 41), dtype=np.float32)
         
@@ -285,7 +260,6 @@ class AsyncControllerService:
         self.current_request = None
         self.running = False
         self.cycle_id = 0
-        self.is_initialized = False
         
         # 11. Enhanced timing statistics
         self.timing_history = []
@@ -304,87 +278,6 @@ class AsyncControllerService:
         self.ctrl_send_stats = OutlierFilteredStats()
         self.cycle_latency_stats = OutlierFilteredStats()
         
-        # 12. Dynamic target qpos for alignment
-        self.target_qpos = None
-        
-    def _setup_zmq_only(self):
-        """Sets up only the ZeroMQ parts for seeref mode."""
-        print("🌐 Setting up ZeroMQ for seeref mode...")
-        self.context = zmq.Context()
-        # State receive socket (PULL) - changed to REQ/REP pattern for simple handshake
-        self.socket_state = self.context.socket(zmq.PULL)
-        self.socket_state.bind(f"tcp://*:{self.zmq_state_port}")
-        # Control send socket (PUSH)
-        self.socket_ctrl = self.context.socket(zmq.PUSH)
-        self.socket_ctrl.bind(f"tcp://*:{self.zmq_ctrl_port}")
-        self.running = False
-        print("✅ ZeroMQ ready for seeref handshake.")
-
-    def _deferred_initialize_and_warmup(self, initial_qpos: np.ndarray):
-        """
-        Performs the JIT-sensitive parts of initialization after receiving the first state.
-        """
-        print("\n--- Deferred Initialization and JIT Warmup ---")
-        # 1. Create a static reference pose by averaging the dynamic trajectory
-        #    and aligning it to the robot's initial state.
-        if self.alignment_mode == "reference":
-            print("🚀 Alignment Mode: REFERENCE. Shifting reference trajectory to robot's initial state.")
-            self.target_qpos = self.task.create_aligned_static_reference(initial_qpos)
-        elif self.alignment_mode == "state_to_origin":
-            print("🚀 Alignment Mode: STATE_TO_ORIGIN. Storing offset to align state for NN input.")
-            self.task.calculate_and_store_initial_offset(initial_qpos)
-            # The "target" qpos for visualization remains the original, unaligned first frame.
-            self.target_qpos = self.task.reference[0]
-        elif self.alignment_mode == "none":
-            print("🚀 Alignment Mode: NONE. No alignment will be performed.")
-            self.target_qpos = self.task.reference[0]
-        else:
-            raise ValueError(f"Invalid alignment mode: {self.alignment_mode}")
-
-        print("✅ Alignment logic complete.")
-
-        # 3. Initialize dummy state and JAX data using the initial state
-        print("🎭 Initializing JAX data with the received robot state...")
-        self.mj_data.qpos[:] = initial_qpos
-        mujoco.mj_forward(self.mj_model, self.mj_data)
-        self.mjx_data = mjx.put_data(self.mj_model, self.mj_data)
-        self.mjx_data = self.mjx_data.replace(
-            mocap_pos=self.mj_data.mocap_pos, 
-            mocap_quat=self.mj_data.mocap_quat
-        )
-
-        # 4. Initialize policy parameters
-        print("🧠 Initializing policy parameters...")
-        initial_knots = predict_knots(self.net, self.mj_data.qpos, self.mj_data.qvel, self.device)
-        self.policy_params = self.ctrl.init_params(initial_knots=initial_knots)
-        
-        # 5. Precompile and warm up JAX functions
-        print("⚡ Precompiling JAX functions...")
-        self.jit_optimize = jax.jit(self.ctrl.optimize)
-        self.jit_interp_func = jax.jit(self.ctrl.interp_func)
-        
-        print("🔥 Warming up JIT with the aligned target...")
-        for i in range(30):
-            # Add small noise to ensure warmup covers some state variation
-            qpos_warmed = self.mj_data.qpos.copy() + np.random.normal(0, 0.01, self.mj_data.qpos.shape)
-            qvel_warmed = self.mj_data.qvel.copy() + np.random.normal(0, 0.01, self.mj_data.qvel.shape)
-            
-            mjx_data_warmed = self.mjx_data.replace(qpos=jnp.array(qpos_warmed), qvel=jnp.array(qvel_warmed))
-            
-            self.policy_params, _ = self.jit_optimize(mjx_data_warmed, self.policy_params)
-            
-            if (i + 1) % 10 == 0:
-                print(f"   Warmup progress: {i+1}/30")
-
-        tq = jnp.arange(0, self.sim_steps_per_replan) * self.mj_model.opt.timestep
-        tk = self.policy_params.tk
-        knots = self.policy_params.mean[None, ...]
-        _ = self.jit_interp_func(tq, tk, knots)
-        
-        self.is_initialized = True
-        print("✅ JIT warmup complete.")
-        print("--------------------------------------------------\n")
-    
     def compute_controls(
         self, 
         qpos: np.ndarray, 
@@ -397,27 +290,16 @@ class AsyncControllerService:
         self.t_ctrl_compute_start = time.time()
         timing_info = {}
         
-        # --- State Alignment for NN ---
-        qpos_for_nn = qpos
-        qvel_for_nn = qvel
-        if self.alignment_mode == "state_to_origin":
-            qpos_for_nn, qvel_for_nn = self.task.align_state_to_origin(qpos, qvel)
-
         # 1. Neural network prediction
         nn_start = time.time()
-        predicted_knots = predict_knots(self.net, qpos_for_nn, qvel_for_nn, self.device)
+        predicted_knots = predict_knots(self.net, qpos, qvel, self.device)
         timing_info['nn_time'] = time.time() - nn_start
         
         # 2. Prepare JAX data
         prep_start = time.time()
-
-        # If aligning state to origin, the CEM optimization must also happen in that aligned frame
-        mjx_qpos = jnp.array(qpos_for_nn)
-        mjx_qvel = jnp.array(qvel_for_nn)
-
         mjx_data = self.mjx_data.replace(
-            qpos=mjx_qpos,
-            qvel=mjx_qvel,
+            qpos=jnp.array(qpos),
+            qvel=jnp.array(qvel),
             time=current_time
         )
         
@@ -586,10 +468,9 @@ class AsyncControllerService:
         print("   - Bidirectional asynchronous ZeroMQ communication (PULL/PUSH)")
         print("   - Cycle ID barrier synchronization mechanism")
         print("   - Enhanced timing statistics and outlier filtering")
-        print("   - On-the-fly alignment of target pose to initial robot state")
         
         # Wait for simulation side to connect for the first time
-        # This loop is now part of the main startup, not here
+        print("🔄 Waiting for simulation side to connect...")
         
         while self.running:
             try:
@@ -601,9 +482,6 @@ class AsyncControllerService:
                     continue
                 
                 recv_cycle_id, state = state_result
-
-                # --- Initial Pose Alignment ---
-                # This logic is now handled in the new start() method before the loop begins.
                 
                 # Fix: synchronize cycle_id logic
                 # On first receive, directly sync to received cycle_id
@@ -648,104 +526,38 @@ class AsyncControllerService:
                     break
                 
     def start(self):
-        """Establishes connection, performs handshake, and starts the main control loop."""
-        if self.seeref:
-            self.run_seeref_service()
-            return
-
-        self.running = True
+        """Start service"""
         print("🚀 Starting asynchronous control computation service...")
+        self.running = True
         
-        # --- STAGE 1: HANDSHAKE AND INITIALIZATION ---
-        print("\n--- STAGE 1: Handshake ---")
-        print("🔄 Waiting for the simulator to send its initial state...")
-
-        # 1. Receive the initial qpos from the simulator (blocking)
-        try:
-            message = self.socket_state.recv()
-            initial_state = pickle.loads(message)
-            initial_qpos = np.array(initial_state['qpos'])
-            print(f"✅ Received initial state from simulator. Base position: {initial_qpos[:3]}")
-        except Exception as e:
-            print(f"❌ Failed to receive initial state: {e}")
-            self.stop()
-            return
-
-        # 2. Perform deferred initialization and JIT warmup based on the initial state
-        self._deferred_initialize_and_warmup(initial_qpos)
+        # Warmup phase: run several dummy loops to ensure JIT is fully warmed up
+        print("🔥 Warming up JIT...")
+        for i in range(30):  # Increase warmup rounds
+            dummy_qpos = self.mj_data.qpos.copy()
+            dummy_qvel = self.mj_data.qvel.copy()
+            dummy_qpos += np.random.normal(0, 0.001, dummy_qpos.shape)
+            dummy_qvel += np.random.normal(0, 0.001, dummy_qvel.shape)
+            _, timing_info = self.compute_controls(dummy_qpos, dummy_qvel, current_time=i * 0.02)
+            if (i + 1) % 10 == 0:
+                print(f"   Warmup progress: {i+1}/30, compute time: {timing_info['total_time']*1000:.1f}ms")
         
-        # 3. Send the aligned target qpos (ghost pose) AND the full trajectory back to the simulator
+        print("✅ JIT warmup complete!")
+        print("✅ Asynchronous control computation pipeline started and running!")
+        print("💡 System status:")
+        print("   - JIT functions fully warmed up")
+        print("   - Asynchronous ZeroMQ config optimized")
+        print(f"   - State port: {self.zmq_state_port} (PULL)")
+        print(f"   - Control port: {self.zmq_ctrl_port} (PUSH)")
+        print("   - Ready to receive robot state and return control commands")
+        print("\n🎯 Now you can start isolated_simulation.py!")
+        
         try:
-            print("📤 Sending the aligned target and full trajectory back to the simulator...")
-            response_message = {
-                'type': 'aligned_trajectory',
-                'ghost_qpos': self.target_qpos.tolist(),
-                'trajectory': np.asarray(self.task.reference).tolist()
-            }
-            self.socket_ctrl.send(pickle.dumps(response_message))
-            print("✅ Aligned trajectory data sent.")
-        except Exception as e:
-            print(f"❌ Failed to send aligned trajectory: {e}")
-            self.stop()
-            return
-            
-        # --- STAGE 2: MAIN CONTROL LOOP ---
-        print("\n--- STAGE 2: Main Control Loop ---")
-        print("✅ Handshake complete. Starting the main control loop...")
-        try:
+            # Main thread focuses on handling async requests
             self.handle_async_requests()
         except KeyboardInterrupt:
             print("\n🛑 Received interrupt signal, shutting down service...")
-        finally:
             self.stop()
     
-    def run_seeref_service(self):
-        """Runs a one-shot service for the --seeref mode."""
-        print("\n--- Running in SeeRef Mode (one-shot trajectory alignment) ---")
-        self.running = True
-        
-        print("🔄 Waiting for the simulator to send its initial state...")
-        try:
-            # 1. Receive the initial qpos from the simulator (blocking)
-            message = self.socket_state.recv()
-            initial_state = pickle.loads(message)
-            initial_qpos = np.array(initial_state['qpos'])
-            print(f"✅ Received initial state from simulator. Base position: {initial_qpos[:3]}")
-
-            # 2. Perform trajectory alignment
-            aligned_ghost_qpos = self.task.create_aligned_static_reference(initial_qpos)
-            
-            # Sanity check: Print a few random frames from the trajectory
-            print("🔍 Sanity checking aligned trajectory data...")
-            trajectory_to_send = np.asarray(self.task.reference)
-            num_frames = len(trajectory_to_send)
-            if num_frames > 0:
-                import random
-                num_samples = min(10, num_frames)  # Print up to 10 frames
-                sample_indices = sorted(random.sample(range(num_frames), num_samples))
-                print(f"  - Displaying {num_samples} random frames from the trajectory:")
-                for i in sample_indices:
-                    frame_data = trajectory_to_send[i]
-                    # Print the entire qpos vector for detailed analysis
-                    print(f"    - Frame {i}/{num_frames - 1}: {np.round(frame_data, 4)}")
-            else:
-                print("  - Trajectory is empty!")
-
-            # 3. Send the aligned trajectory back
-            print("📤 Sending the aligned trajectory back to the simulator...")
-            response_message = {
-                'type': 'aligned_trajectory',
-                'ghost_qpos': aligned_ghost_qpos.tolist(),
-                'trajectory': trajectory_to_send.tolist()
-            }
-            self.socket_ctrl.send(pickle.dumps(response_message))
-            print("✅ Aligned trajectory sent. Shutting down seeref service.")
-
-        except Exception as e:
-            print(f"❌ An error occurred in seeref mode: {e}")
-        finally:
-            self.stop()
-
     def stop(self):
         """Stop service"""
         self.running = False
@@ -753,11 +565,6 @@ class AsyncControllerService:
         self.socket_ctrl.close()
         self.context.term()
         
-        # In seeref mode, we don't collect stats, so just print a simple message and exit.
-        if self.seeref:
-            print("✅ Asynchronous control computation service stopped")
-            return
-
         # Print final statistics
         print(f"\n🏁 === Final Asynchronous Control Report ===")
         print(f"📊 Overall statistics:")
@@ -827,17 +634,6 @@ def main():
     parser.add_argument("--plan_horizon", type=float, default=0.4, help="Planning horizon (shorter for speed)")
     parser.add_argument("--num_knots", type=int, default=4, help="Spline knot count")
     parser.add_argument("--iterations", type=int, default=1, help="CEM iteration count")
-    parser.add_argument("--seeref", action="store_true", help="Run in seeref mode: receive qpos, align trajectory, send back, and exit.")
-    parser.add_argument(
-        "--alignment_mode",
-        type=str,
-        default="state_to_origin",
-        choices=["reference", "state_to_origin", "none"],
-        help="How to handle initial state offset for OOD testing. "
-             "'reference': shifts the reference trajectory to the robot. "
-             "'state_to_origin': shifts the robot state to the reference origin for NN input. "
-             "'none': do nothing, run raw OOD."
-    )
 
     args = parser.parse_args()
 
@@ -848,13 +644,11 @@ def main():
         frequency=args.frequency,
         zmq_state_port=args.zmq_state_port,
         zmq_ctrl_port=args.zmq_ctrl_port,
-        seeref=args.seeref,
         num_samples=args.num_samples,
         num_elites=args.num_elites,
         plan_horizon=args.plan_horizon,
         num_knots=args.num_knots,
-        iterations=args.iterations,
-        alignment_mode=args.alignment_mode
+        iterations=args.iterations
     )
     
     service.start()

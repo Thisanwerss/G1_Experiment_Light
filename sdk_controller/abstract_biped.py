@@ -45,7 +45,7 @@ class HGSafetyLayer(SafetyLayer):
             conservative_safety: Whether to use more conservative safety limits
         """
         # Initialize base SafetyLayer, passing the conservative flag
-        super().__init__(mj_model, conservative_safety=conservative_safety)
+        super().__init__(mj_model, conservative_safety=conservative_safety, num_active_joints=NUM_ACTIVE_BODY_JOINTS)
         
         self.robot_config = robot_config
         self.conservative_safety = conservative_safety

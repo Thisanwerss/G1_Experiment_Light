@@ -1,4 +1,5 @@
 import numpy as np
+from dataclasses import dataclass
 
 # G1 Robot Configuration
 ROBOT_NAME = "g1"
@@ -19,18 +20,38 @@ CONTROL_FREQ = 100  # 100Hz control frequency
 # G1 29DOF Version
 # Joint order: left leg(6) + right leg(6) + waist(1) + left arm(7) + right arm(7) = 27 body joints
 # Note: Finger joints are not included here, finger joint control (unitree_hg::msg::dds_::HandCmd_.motor_cmd) is replaced with current position (unitree_hg::msg::dds_::HandState_.motor_state) with high damping in actual control
+
+
+
+# STAND_UP_JOINT_POS = np.array([
+#     # Left Leg
+#     0.0968964, -0.12121, 0.0411549, 0.0833635, -0.160106, 0.0807926,
+#     #0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+#     # Right Leg
+#     0.0054431, -0.0883059, 0.122414, 0.369962, -0.381041, 0.0785379,
+#     #0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+#     # Waist
+#     #-0.0640063,
+#     0.0,
+#     # Left Arm
+#     -0.00810865, -0.209113, 0.165738, 0.0168338, 0.198281, -0.195008, 0.0899386,
+#     # Right Arm
+#     0.0514546, 0.677822, 1.7251, -1.44205, -1.90577, -1.54437, -1.92981,
+#     # Left Hand (these are not controlled but included for completeness)
+#     -0.0127106, 0.0960897, -0.00151768, 0.236564, -0.139678, -0.51143, -0.0517731,
+#     # Right Hand (these are not controlled but included for completeness)
+#     -0.0280968, -1.00421, -1.69945, 1.52882, 1.8316, 1.55194, 1.90963
+# ], dtype=float)
 STAND_UP_JOINT_POS = np.array([
-    # Left leg: hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll
-    0.0, 0.0, 0.0, -0.3, 0.3, 0.0,
-    # Right leg: hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll  
-    0.0, 0.0, 0.0, -0.3, 0.3, 0.0,
-    # Waist: waist_yaw (only one degree of freedom)
-    0.0,
-    # Left arm: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_roll, wrist_pitch, wrist_yaw
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    # Right arm: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_roll, wrist_pitch, wrist_yaw
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-], dtype=float)
+
+            0, 0, 0,     # waist joints
+            0, 0, 0, 0, 0, 0,     # left arm
+            0, 0, 0, 0, 0, 0,     # right arm
+            0, 0, 0, 0.0, 0, 0,  # left leg (hip, knee, ankle)
+            0, 0, 0, 0.0, 0.0, 0,  # right leg
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  # fingers
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0   # fingers
+        ])  # 确保长度匹配
 
 
 # PD controller gains (based on kp values from g1_lab.xml)
@@ -154,3 +175,27 @@ NUM_HAND_JOINTS = 7  # Per hand
 
 # Total number of joints (for MuJoCo)
 NUM_TOTAL_JOINTS = 41  # 27 body joints + 14 finger joints 
+
+@dataclass
+class G1:
+    ROBOT_NAME = ROBOT_NAME
+    OBJECT_NAME = OBJECT_NAME
+    P_IMU_IN_VICON = P_IMU_IN_VICON
+    R_IMU_IN_VICON = R_IMU_IN_VICON
+    P_IMU_IN_BASE = P_IMU_IN_BASE
+    R_IMU_IN_BASE = R_IMU_IN_BASE
+    CONTROL_FREQ = CONTROL_FREQ
+    STAND_UP_JOINT_POS = STAND_UP_JOINT_POS
+    LEG_KP = LEG_KP
+    ARM_KP = ARM_KP
+    WAIST_KP = WAIST_KP
+    HAND_KP = HAND_KP
+    Kd = Kd
+    MUJOCO_JOINT_NAMES = MUJOCO_JOINT_NAMES
+    BODY_MUJOCO_TO_DDS = BODY_MUJOCO_TO_DDS
+    LEFT_HAND_MUJOCO_TO_DDS = LEFT_HAND_MUJOCO_TO_DDS
+    RIGHT_HAND_MUJOCO_TO_DDS = RIGHT_HAND_MUJOCO_TO_DDS
+    NUM_BODY_JOINTS = NUM_BODY_JOINTS
+    NUM_ACTIVE_BODY_JOINTS = NUM_ACTIVE_BODY_JOINTS
+    NUM_HAND_JOINTS = NUM_HAND_JOINTS
+    NUM_TOTAL_JOINTS = NUM_TOTAL_JOINTS 

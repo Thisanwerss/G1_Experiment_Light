@@ -1,33 +1,17 @@
 #!/usr/bin/env python3
 """
 ZeroMQ-DDS 通信桥接器
-=====================
-该脚本作为连接 `run_policy_pruned.py` 控制节点和真实G1机器人的桥梁。
-
-它通过ZeroMQ从控制器接收PD（Proportional-Derivative）控制目标，
-并通过DDS（Data Distribution Service）将这些指令发送给机器人硬件。
-同时，它会收集机器人的状态数据（通过DDS和Vicon）并将其发送回控制节点。
+支持仿真验证和真实机器人部署的统一接口
 
 使用方式:
-1. CEM+lo模式 (用于测试DDS通信): 
-   python zmq_dds_bridge.py --channel lo 
-2. CEM+真实机器人 (需要Vicon): 
-   python zmq_dds_bridge.py --channel <network_interface>
-
-启动Vicon的命令:
+1. 仿真模式: python zmq_dds_bridge.py --simulate
+2. CEM+lo模式: python zmq_dds_bridge.py --channel lo 
+3. CEM+真实机器人: python zmq_dds_bridge.py --channel <network_interface>
 ros2 launch vicon_receiver client.launch.py 
+
+ref:<key qpos='2.21501 1.05997 1.01669 0.930791 0.00339909 -0.0133212 -0.365294 0.0968964 -0.12121 0.0411549 0.0833635 -0.160106 0.0807926 0.0054431 -0.0883059 0.122414 0.369962 -0.381041 0.0785379 -0.0640063 -0.00810865 -0.209113 0.165738 0.0168338 0.198281 -0.195008 0.0899386 0.0514546 0.677822 1.7251 -1.44205 -1.90577 -1.54437 -1.92981 -0.0127106 0.0960897 -0.00151768 0.236564 -0.139678 -0.51143 -0.0517731 -0.0280968 -1.00421 -1.69945 1.52882 1.8316 1.55194 1.90963 0 0 1 1 0 0 0'/>
+
 """
-
-import sys, os
-print("[dbg] sys.executable =", sys.executable)
-print("[dbg] first 3 sys.path =", sys.path[:3])
-import importlib
-m = importlib.import_module("sdk_controller")
-print("[dbg] sdk_controller file =", getattr(m, "__file__", None))
-
-
-
-
 
 import argparse
 import time
@@ -54,6 +38,10 @@ except json.JSONDecodeError:
     print("❌ global_config.json 解析失败, 使用默认值。")
     VICON_Z_OFFSET = 0.0
 
+
+# 仿真相关导入
+import mujoco
+import mujoco.viewer
 
 # 真实机器人相关导入
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
@@ -197,6 +185,7 @@ class ZMQDDSBridge:
     
     def __init__(
         self,
+        simulate: bool = False,
         channel: str = "lo",
         domain_id: int = 1,
         zmq_state_port: int = 5555,
@@ -205,6 +194,7 @@ class ZMQDDSBridge:
         kp_scale_factor: float = 1.0,
         conservative_safety: bool = False
     ):
+        self.simulate = simulate
         self.channel = channel
         self.domain_id = domain_id
         self.zmq_state_port = zmq_state_port
@@ -212,7 +202,7 @@ class ZMQDDSBridge:
         self.control_frequency = control_frequency
         self.kp_scale_factor = kp_scale_factor
         self.conservative_safety = conservative_safety
-        self.control_dt = 1.0 / self.control_frequency
+        self.control_dt = 1.0 / control_frequency
         
         # 状态管理
         self.running = Event()
@@ -220,14 +210,20 @@ class ZMQDDSBridge:
         self.current_controls = None
         
         print(f"🚀 初始化 ZeroMQ-DDS 桥接器")
-        print(f"   模式: 真实机器人/lo模式 (通道: {channel})")
+        if simulate:
+            print(f"   模式: MuJoCo仿真")
+        else:
+            print(f"   模式: CEM控制器 (通道: {channel})")
         print(f"   控制频率: {control_frequency} Hz")
         
         # 1. 初始化 ZeroMQ 连接
         self._setup_zmq()
         
-        # 2. 初始化CEM控制器后端
-        self._setup_cem_controller()
+        # 2. 根据模式初始化后端
+        if simulate:
+            self._setup_simulation()
+        else:
+            self._setup_cem_controller()
             
         print("✅ 桥接器初始化完成")
     
@@ -248,6 +244,54 @@ class ZMQDDSBridge:
         # 设置非阻塞轮询
         self.poller = zmq.Poller()
         self.poller.register(self.socket_ctrl, zmq.POLLIN)
+        
+    def _setup_simulation(self):
+        """设置仿真后端"""
+        print("🎮 设置 MuJoCo 仿真...")
+        
+        # 加载 G1 模型
+        self.mj_model = mujoco.MjModel.from_xml_path("g1_model/scene.xml")
+        
+        # 配置 MuJoCo 参数
+        self.mj_model.opt.timestep = 0.01
+        self.mj_model.opt.iterations = 10
+        self.mj_model.opt.ls_iterations = 50
+        self.mj_model.opt.noslip_iterations = 2
+        self.mj_model.opt.o_solimp = [0.0, 0.95, 0.01, 0.5, 2]
+        self.mj_model.opt.enableflags = mujoco.mjtEnableBit.mjENBL_OVERRIDE
+        
+        self.mj_data = mujoco.MjData(self.mj_model)
+        
+        # 计算仿真步数 - 与isolated_simulation.py完全一致
+        replan_period = 1.0 / self.control_frequency
+        sim_steps_per_replan = int(replan_period / self.mj_model.opt.timestep)
+        self.sim_steps_per_replan = max(sim_steps_per_replan, 1)
+        self.actual_step_dt = self.sim_steps_per_replan * self.mj_model.opt.timestep
+        
+        print(f"   MuJoCo 时间步: {self.mj_model.opt.timestep:.4f}s")
+        print(f"   MuJoCo 每控制周期步数: {self.sim_steps_per_replan}")
+        print(f"   实际控制周期: {self.actual_step_dt:.4f}s")
+        
+        # 设置查看器
+        self.viewer = mujoco.viewer.launch_passive(self.mj_model, self.mj_data)
+        
+        # 初始化默认控制命令(站立姿态)
+        print("🦾 设置默认站立控制...")
+        standing_qpos = np.array([
+            0, 0, 0.75,  # root position (x, y, z)
+            1, 0, 0, 0,  # root quaternion (w, x, y, z)
+            0, 0, 0,     # waist joints
+            0, 0, 0, 0, 0, 0,     # left arm
+            0, 0, 0, 0, 0, 0,     # right arm
+            0, 0, -0.3, 0.6, -0.3, 0,  # left leg (hip, knee, ankle)
+            0, 0, -0.3, 0.6, -0.3, 0,  # right leg
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  # fingers
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0   # fingers
+        ])[:41]  # 确保长度匹配
+        
+        # 创建默认PD控制命令(重复站立姿态)
+        default_controls = np.tile(standing_qpos, (self.sim_steps_per_replan, 1)).astype(np.float32)
+        self.current_controls = default_controls
         
     def _setup_cem_controller(self):
         """设置CEM控制器模式"""
@@ -276,19 +320,73 @@ class ZMQDDSBridge:
     
     def get_robot_state(self) -> Dict[str, Any]:
         """获取机器人状态"""
-        # 真实机器人或lo模式：使用CEM控制器获取状态
-        return self.cem_controller.get_robot_state()
+        if self.simulate:
+            return {
+                'qpos': self.mj_data.qpos.copy(),
+                'qvel': self.mj_data.qvel.copy(),
+                'mocap_pos': self.mj_data.mocap_pos.copy(),
+                'mocap_quat': self.mj_data.mocap_quat.copy(),
+                'time': self.mj_data.time
+            }
+        else:
+            # 真实机器人或lo模式：使用CEM控制器获取状态
+            return self.cem_controller.get_robot_state()
+    
+    def _get_dummy_state(self) -> Dict[str, Any]:
+        """生成dummy状态（固定站立姿态）"""
+        # 创建正确维度的G1状态
+        # qpos: base(7) + joints(41) = 48维
+        # qvel: base(6) + joints(41) = 47维  
+        dummy_qpos = np.zeros(48)  
+        dummy_qvel = np.zeros(47)
+        
+        # 基座位置和姿态 (前7维)
+        dummy_qpos[0:3] = [0.0, 0.0, 1.0]  # x, y, z
+        dummy_qpos[3:7] = [1.0, 0.0, 0.0, 0.0]  # w, x, y, z quaternion
+        
+        # 身体关节（使用G1站立姿态）- 索引7开始
+        if len(STAND_UP_JOINT_POS) == NUM_ACTIVE_BODY_JOINTS:
+            dummy_qpos[7:7+NUM_ACTIVE_BODY_JOINTS] = STAND_UP_JOINT_POS
+        
+        # 手部关节保持为0（索引7+27=34开始，共14个）
+        # dummy_qpos[34:48] = 0.0  # 已经初始化为0
+        
+        # 速度全为0（已经初始化为0）
+        
+        return {
+            'qpos': dummy_qpos,
+            'qvel': dummy_qvel,
+            'mocap_pos': np.zeros(3),
+            'mocap_quat': np.array([1, 0, 0, 0]),
+            'time': time.time()
+        }
+    
+    def execute_simulation_steps(self, controls: np.ndarray):
+        """执行仿真步骤或机器人控制"""
+        if self.simulate:
+            # 仿真模式：运行 MuJoCo 仿真步
+            for i in range(self.sim_steps_per_replan):
+                # 应用控制命令
+                if i < len(controls):
+                    self.mj_data.ctrl[:] = controls[i]
+                
+                # 步进仿真
+                mujoco.mj_step(self.mj_model, self.mj_data)
+                
+                # 更新查看器
+                if self.viewer and self.viewer.is_running():
+                    self.viewer.sync()
+        else:
+            # CEM控制器模式
+            self.execute_robot_control(controls)
     
     def execute_robot_control(self, controls: np.ndarray):
         """执行G1机器人控制 - 将控制序列插值到1000Hz发送"""
         if len(controls) > 0 and self.cem_controller is not None:
-            # 策略(e.g., CEM)以50Hz提供PD目标(每0.02s提供1个点)，机器人控制器期望1000Hz
-            # 因此，每个PD目标需要保持20ms (发送20次，每次间隔1ms)
-            num_sends = int((1.0 / self.control_frequency) / 0.001)
-            
+            # 策略(e.g., CEM)以100Hz提供PD目标(每0.02s提供2个点)，机器人控制器期望1000Hz
+            # 因此，每个PD目标需要保持10ms (发送10次，每次间隔1ms)
             for pd_targets in controls:
-                # 在一个控制周期内，以1000Hz重复发送同一个PD目标
-                for _ in range(num_sends):
+                for _ in range(10):
                     self.cem_controller.send_motor_command(
                         time=time.time(), 
                         pd_targets=pd_targets
@@ -360,63 +458,29 @@ class ZMQDDSBridge:
     def run(self):
         """运行主循环"""
         print(f"🎬 启动桥接器主循环")
+        if self.simulate:
+            print("💡 仿真模式：等待控制命令驱动仿真")
+        else:
+            if self.channel == "lo":
+                print("💡 lo模式：发送dummy状态，测试DDS通信管道")
+            else:
+                print("💡 真实机器人模式：完整控制回路")
+        print("🔄 等待控制节点连接...")
+        time.sleep(1.0)  # 给控制节点足够时间启动
+        
+        # 发送初始状态触发第一次控制计算
+        initial_state = self.get_robot_state()
+        self.send_state_to_control(initial_state)
+        print("📤 已发送初始状态，等待第一个控制命令...")
         
         self.running.set()
-
-        # --- STAGE 1: HANDSHAKE ---
-        print("\n--- STAGE 1: Handshake ---")
-        
-        initial_state = None
-        print("🔄 等待有效的初始机器人状态 (Vicon+DDS)...")
-        while initial_state is None and self.running.is_set():
-            initial_state = self.get_robot_state()
-            if initial_state is None:
-                if not self.running.is_set(): break
-                print("  ...仍在等待初始状态, 0.5s后重试...")
-                time.sleep(0.5)
-                
-        if not self.running.is_set() or initial_state is None:
-            print("❌ 未能获取初始状态，桥接器正在停止。")
-            self.stop()
-            return
-
-        try:
-            initial_state_msg = {
-                'type': 'init',
-                'qpos': initial_state['qpos']
-            }
-            print("📤 正在发送初始状态给策略节点...")
-            self.socket_state.send(pickle.dumps(initial_state_msg))
-            
-            print("🔄 正在等待策略节点返回握手确认...")
-            response_bytes = self.socket_ctrl.recv() # 阻塞接收
-            response = pickle.loads(response_bytes)
-            
-            if response.get('type') == 'aligned_trajectory':
-                print("✅ 握手完成。")
-            else:
-                raise ValueError("从策略节点收到无效的握手响应")
-
-        except Exception as e:
-            print(f"❌ 握手失败: {e}")
-            self.stop()
-            return
-
-        # --- STAGE 2: MAIN CONTROL LOOP ---
-        print("\n--- STAGE 2: 主控制循环 ---")
-        
-        # 发送第一个真实状态以启动控制循环
-        first_state = self.get_robot_state()
-        if first_state is None:
-            print("❌ 握手后立即失去机器人状态。为安全起见，正在停止。")
-            self.stop()
-            return
-            
-        self.send_state_to_control(first_state)
-        print("📤 已发送初始状态，等待第一个控制命令...")
         
         try:
             while self.running.is_set():
+                # 检查查看器状态（仅仿真模式）
+                if self.simulate and self.viewer and not self.viewer.is_running():
+                    break
+                
                 # ========== 锁步屏障：等待新的控制命令 ==========
                 print(f"🔒 Cycle #{self.cycle_id}: 等待控制命令...")
                 new_controls = None
@@ -436,20 +500,15 @@ class ZMQDDSBridge:
                 # ========== 同步交换：发送当前状态 ==========
                 state = self.get_robot_state()
                 if state is None:
-                    print("❌ 失去机器人状态(Vicon或DDS超时)。为安全起见，正在停止。")
-                    print("   发送阻尼命令...")
-                    for _ in range(5): # 发送几次以确保机器人收到
-                        self.cem_controller.damping_motor_cmd()
-                        time.sleep(0.01)
-                    self.stop()
-                    break # 退出循环
+                    print("⚠️ 无法获取机器人状态")
+                    continue
                 
                 if not self.send_state_to_control(state):
                     print(f"❌ Cycle #{self.cycle_id}: 状态发送失败")
                     continue
                 
-                # ========== 执行机器人控制 ==========
-                self.execute_robot_control(self.current_controls)
+                # ========== 执行仿真步骤或机器人控制 ==========
+                self.execute_simulation_steps(self.current_controls)
                 
                 # ========== 周期完成 ==========
                 self.cycle_id += 1
@@ -481,6 +540,11 @@ def signal_handler(sig, frame):
 
 def main():
     parser = argparse.ArgumentParser(description="ZeroMQ-DDS 通信桥接器")
+    parser.add_argument(
+        "--simulate",
+        action="store_true",
+        help="使用MuJoCo仿真模式"
+    )
     parser.add_argument(
         "--channel",
         type=str,
@@ -530,6 +594,7 @@ def main():
     
     # 创建并运行桥接器
     bridge = ZMQDDSBridge(
+        simulate=args.simulate,
         channel=args.channel,
         domain_id=args.domain_id,
         zmq_state_port=args.zmq_state_port,
@@ -612,10 +677,6 @@ class CEMSDKController(HGSDKController):
         self.update_q_v_from_lowstate()
         self.update_hand_q_v_from_handstate()
         
-        # 初始化mocap值为默认值
-        mocap_pos_to_send = np.zeros(3)
-        mocap_quat_to_send = np.array([1, 0, 0, 0])
-
         # 从Vicon更新基座状态
         if self.vicon_required and self.vicon_subscriber:
             p, q, v, w = self.vicon_subscriber.get_state()
@@ -626,26 +687,17 @@ class CEMSDKController(HGSDKController):
                 self._q[3:7] = q  # (w, x, y, z)
                 self._v[0:3] = v
                 self._v[3:6] = w
-                # 同样用vicon数据填充mocap字段，以对齐sim
-                mocap_pos_to_send = p.copy()
-                mocap_quat_to_send = q.copy()
             else:
                 # Vicon数据无效，可能导致上层策略出问题，返回None来中断当前周期
                 print("❌ get_robot_state: 无效的Vicon数据，返回None", flush=True)
                 return None
 
-        # 检查DDS数据是否有效（一个简单的完整性检查）
-        # 7: 之后是关节qpos。如果它们都是零，很可能意味着没有收到DDS数据。
-        if np.all(self._q[7:] == 0):
-            print("❌ get_robot_state: 关节数据全为零，可能未收到DDS数据。返回None。", flush=True)
-            return None
-
         # 返回ZMQ兼容格式
         return {
             'qpos': self._q.copy(),
             'qvel': self._v.copy(),
-            'mocap_pos': mocap_pos_to_send,
-            'mocap_quat': mocap_quat_to_send,
+            'mocap_pos': np.zeros(3),
+            'mocap_quat': np.array([1,0,0,0]),
             'time': time.time()
         }
 

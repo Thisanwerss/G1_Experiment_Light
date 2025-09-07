@@ -163,12 +163,12 @@ def main():
     mj_data = mujoco.MjData(mj_model)
 
     #OOD Test
-    offset_xy = np.array([6.0, -6.0])
+    offset_xy = np.array([1.0, -1.5])
     print(f"🔬 OOD测试：施加初始位置偏移 {offset_xy}")
     mj_data.qpos[:2] += offset_xy
 
     # 增加基座的yaw偏转，使其“斜着站”
-    yaw_offset_deg = 30.0
+    yaw_offset_deg = -20.0
     yaw_offset_rad = np.deg2rad(yaw_offset_deg)
     print(f"🔬 OOD测试：施加初始Yaw偏转 {yaw_offset_deg}°")
     
