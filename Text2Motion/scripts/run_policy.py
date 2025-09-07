@@ -106,7 +106,7 @@ def main():
     parser.add_argument(
         "--num_samples",
         type=int,
-        default=500,
+        default=200,
         help="Number of rollouts to perform.",
     )
     parser.add_argument(
@@ -130,13 +130,13 @@ def main():
     parser.add_argument(
         "--iterations",
         type=int,
-        default=1,
+        default=2,
         help="Sampling iterations to perform.",
     )
     parser.add_argument(
         "--alignment_mode",
         type=str,
-        default="state_to_origin",
+        default="reference",
         choices=["reference", "state_to_origin", "none"],
         help="How to handle initial state offset for OOD testing. "
              "'reference': shifts the reference trajectory to the robot. "
@@ -163,7 +163,7 @@ def main():
     mj_data = mujoco.MjData(mj_model)
 
     #OOD Test
-    offset_xy = np.array([0.0, -1.0])
+    offset_xy = np.array([6.0, -6.0])
     print(f"🔬 OOD测试：施加初始位置偏移 {offset_xy}")
     mj_data.qpos[:2] += offset_xy
 
@@ -194,8 +194,10 @@ def main():
     elif args.alignment_mode == "state_to_origin":
         print("🚀 Alignment Mode: STATE_TO_ORIGIN. Storing offset to align state for NN input.")
         task.calculate_and_store_initial_offset(mj_data.qpos)
-    else: # args.alignment_mode == "none"
+    elif args.alignment_mode == "none":
         print("🚀 Alignment Mode: NONE. No alignment will be performed.")
+    else:
+        raise ValueError(f"Invalid alignment mode: {args.alignment_mode}")
 
     reference = task.reference if args.show_reference else None
 
@@ -225,6 +227,16 @@ def main():
     mjx_data = mjx_data.replace(
         mocap_pos=mj_data.mocap_pos, mocap_quat=mj_data.mocap_quat
     )
+
+    # 在 state_to_origin 模式下，初次暖启动要用对齐后的输入
+    if args.alignment_mode == "state_to_origin":
+        qpos0, qvel0 = task.align_state_to_origin(mj_data.qpos, mj_data.qvel)
+    else:
+        qpos0, qvel0 = mj_data.qpos, mj_data.qvel
+    initial_knots = predict_knots(net, qpos0, qvel0, device) if args.hybrid else None
+
+
+
     initial_knots = predict_knots(net, mj_data.qpos, mj_data.qvel, device) if args.hybrid else None
     policy_params = ctrl.init_params(initial_knots=initial_knots)
     jit_optimize = jax.jit(ctrl.optimize)
@@ -285,7 +297,8 @@ def main():
         if args.hybrid:
             plan_start = time.time()
             new_knots = predict_knots(net, qpos_for_nn, qvel_for_nn, device)
-            policy_params.replace(mean=new_knots)
+            #policy_params.replace(mean=new_knots)
+            policy_params=policy_params.replace(mean=jnp.asarray(new_knots))
             policy_params, rollouts = jit_optimize(mjx_data, policy_params)
             plan_time = time.time() - plan_start
         else:
