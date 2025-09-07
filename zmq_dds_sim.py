@@ -618,9 +618,9 @@ def main():
     parser.add_argument("--zmq_ctrl_port", type=int, default=5556, help="ZeroMQ 控制端口")
     parser.add_argument("--frequency", type=float, default=50.0, help="控制频率 (Hz)")
     parser.add_argument("--seeref", action="store_true", help="启动参考轨迹查看模式，不进行仿真控制")
-    parser.add_argument("--offset_x", type=float, default=1.0, help="初始位置X轴偏移量 (米)")
-    parser.add_argument("--offset_y", type=float, default=-1.5, help="初始位置Y轴偏移量 (米)")
-    parser.add_argument("--offset_yaw", type=float, default=-20.0, help="初始朝向Yaw偏移量 (度)")
+    parser.add_argument("--offset_x", type=float, default=0.12, help="初始位置X轴偏移量 (米)")
+    parser.add_argument("--offset_y", type=float, default=0.05, help="初始位置Y轴偏移量 (米)")
+    parser.add_argument("--offset_yaw", type=float, default=5.0, help="初始朝向Yaw偏移量 (度)")
     parser.add_argument("--log", action="store_true", help="启用仿真数据日志记录")
     
     args = parser.parse_args()

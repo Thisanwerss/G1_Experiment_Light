@@ -822,11 +822,11 @@ def main():
     )
     
     # CEM parameters (default values tuned to avoid GPU memory issues and improve speed)
-    parser.add_argument("--num_samples", type=int, default=300, help="CEM sample count (lower for speed)")
+    parser.add_argument("--num_samples", type=int, default=120, help="CEM sample count (lower for speed)")
     parser.add_argument("--num_elites", type=int, default=15, help="CEM elite count")
     parser.add_argument("--plan_horizon", type=float, default=0.4, help="Planning horizon (shorter for speed)")
     parser.add_argument("--num_knots", type=int, default=4, help="Spline knot count")
-    parser.add_argument("--iterations", type=int, default=1, help="CEM iteration count")
+    parser.add_argument("--iterations", type=int, default=2, help="CEM iteration count")
     parser.add_argument("--seeref", action="store_true", help="Run in seeref mode: receive qpos, align trajectory, send back, and exit.")
     parser.add_argument(
         "--alignment_mode",
