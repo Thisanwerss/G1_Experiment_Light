@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 from interpax import interp1d
 import mujoco
+from scipy.spatial.transform import Rotation as R
 import numpy as np
 from huggingface_hub import hf_hub_download
 from mujoco import mjx
@@ -32,6 +33,10 @@ class HumanoidStand(Task):
         The list of available reference files can be found at
         https://huggingface.co/datasets/robfiras/loco-mujoco-datasets/tree/main.
         """
+        # Alignment attributes for 'state_to_origin' mode
+        self.initial_ref_pose_inv_rot = None
+        self.initial_ref_pose_pos = None
+
         mj_model = mujoco.MjModel.from_xml_path(
             ROOT + "/models/g1/scene.xml"
         )
@@ -194,6 +199,252 @@ class HumanoidStand(Task):
         cost_weights[:7] = 5.0  # Base pose
         # cost_weights[-7:] = 10.0  # Object pose
         self.cost_weights = jnp.array(cost_weights)
+
+    def set_reference_qpos(self, qpos: np.ndarray):
+        """
+        Sets a static reference qpos, overriding the pre-loaded sequence.
+        This will re-calculate all reference data (feet, hands) based on this single pose.
+        """
+        # Overwrite the reference sequence with a single static pose repeated.
+        # The length doesn't matter much as the index will be clipped.
+        self.reference = jnp.array([qpos, qpos])
+        print(f"HYDRAX: set_reference_qpos")
+
+        # Recompute reference feet and palms positions and orientations for this static pose
+        mj_data = mujoco.MjData(self.mj_model)
+        mj_data.qpos[:] = qpos
+        mujoco.mj_forward(self.mj_model, mj_data)
+
+        # Feet
+        ref_left_foot_pos = mj_data.site_xpos[self.mj_model.site("left_foot").id].copy()
+        ref_right_foot_pos = mj_data.site_xpos[self.mj_model.site("right_foot").id].copy()
+        # Keep feet on the ground plane as per original logic
+        ref_left_foot_pos[2] = 0.035
+        ref_right_foot_pos[2] = 0.035
+        ref_left_foot_quat = np.zeros(4)
+        ref_right_foot_quat = np.zeros(4)
+        mujoco.mju_mat2Quat(ref_left_foot_quat, mj_data.site_xmat[self.mj_model.site("left_foot").id].flatten())
+        mujoco.mju_mat2Quat(ref_right_foot_quat, mj_data.site_xmat[self.mj_model.site("right_foot").id].flatten())
+        
+        # Hands
+        ref_left_palm_pos = mj_data.site_xpos[self.mj_model.site("left_hand").id].copy()
+        ref_right_palm_pos = mj_data.site_xpos[self.mj_model.site("right_hand").id].copy()
+        ref_left_palm_quat = np.zeros(4)
+        ref_right_palm_quat = np.zeros(4)
+        mujoco.mju_mat2Quat(ref_left_palm_quat, mj_data.site_xmat[self.mj_model.site("left_hand").id].flatten())
+        mujoco.mju_mat2Quat(ref_right_palm_quat, mj_data.site_xmat[self.mj_model.site("right_hand").id].flatten())
+
+        # Update the reference arrays to be static.
+        self.ref_left_foot_pos = jnp.array([ref_left_foot_pos, ref_left_foot_pos])
+        self.ref_left_foot_quat = jnp.array([ref_left_foot_quat, ref_left_foot_quat])
+        self.ref_right_foot_pos = jnp.array([ref_right_foot_pos, ref_right_foot_pos])
+        self.ref_right_foot_quat = jnp.array([ref_right_foot_quat, ref_right_foot_quat])
+
+        self.ref_left_palm_pos = jnp.array([ref_left_palm_pos, ref_left_palm_pos])
+        self.ref_left_palm_quat = jnp.array([ref_left_palm_quat, ref_left_palm_quat])
+        self.ref_right_palm_pos = jnp.array([ref_right_palm_pos, ref_right_palm_pos])
+        self.ref_right_palm_quat = jnp.array([ref_right_palm_quat, ref_right_palm_quat])
+
+    def create_aligned_static_reference(self, initial_qpos: np.ndarray) -> np.ndarray:
+        """
+        Aligns the entire pre-loaded reference trajectory to the robot's initial state.
+        This is done by calculating an offset for base X, Y, and Yaw from the first
+        frame of the trajectory and applying this constant offset to all frames.
+        """
+        print("🔬 Aligning dynamic reference trajectory to initial robot state...")
+
+        if self.reference is None or len(self.reference) == 0:
+            print("❌ Reference trajectory is not loaded. Cannot align.")
+            return initial_qpos
+
+        # 1. Get the initial state's decoupled quantities (X, Y, Yaw)
+        initial_base_xy = initial_qpos[:2]
+        initial_quat_wxyz = initial_qpos[3:7]  # w, x, y, z
+        initial_yaw = R.from_quat([initial_quat_wxyz[1], initial_quat_wxyz[2], initial_quat_wxyz[3], initial_quat_wxyz[0]]).as_euler('xyz')[2]
+
+        # 2. Get the same quantities from the first frame of the reference trajectory
+        ref_qpos_first_frame = np.array(self.reference[0])
+        ref_base_xy_first_frame = ref_qpos_first_frame[:2]
+        ref_quat_wxyz_first_frame = ref_qpos_first_frame[3:7]
+        ref_yaw_first_frame = R.from_quat([ref_quat_wxyz_first_frame[1], ref_quat_wxyz_first_frame[2], ref_quat_wxyz_first_frame[3], ref_quat_wxyz_first_frame[0]]).as_euler('xyz')[2]
+
+        # 3. Calculate the required offsets
+        xy_offset = initial_base_xy - ref_base_xy_first_frame
+        yaw_offset = initial_yaw - ref_yaw_first_frame
+        # Normalize yaw_offset to [-pi, pi]
+        yaw_offset = (yaw_offset + np.pi) % (2 * np.pi) - np.pi
+        
+        print(f"   Calculated offsets: dX={xy_offset[0]:.3f}, dY={xy_offset[1]:.3f}, dYaw={np.rad2deg(yaw_offset):.2f}°")
+
+        # 4. Apply the offsets to the entire reference trajectory
+        new_reference = np.array(self.reference)
+        
+        # Vectorized operation for efficiency
+        # Apply XY offset
+        new_reference[:, 0:2] += xy_offset
+
+        # Apply Yaw offset
+        ref_quats_wxyz = new_reference[:, 3:7]
+        ref_quats_xyzw = ref_quats_wxyz[:, [1, 2, 3, 0]]  # Scipy expects [x,y,z,w]
+        ref_eulers = R.from_quat(ref_quats_xyzw).as_euler('xyz')
+        ref_eulers[:, 2] += yaw_offset  # Add yaw offset
+        
+        # Convert back to quaternions
+        new_quats_xyzw = R.from_euler('xyz', ref_eulers).as_quat()
+        new_quats_wxyz = new_quats_xyzw[:, [3, 0, 1, 2]]  # Convert back to [w,x,y,z]
+        new_reference[:, 3:7] = new_quats_wxyz
+        
+        # Overwrite the class's reference trajectory
+        self.reference = jnp.array(new_reference)
+        
+        # 5. Re-calculate all derived reference data (feet, hands) based on the new trajectory
+        print("👣 Re-calculating feet and hand reference data for the new trajectory...")
+        mj_data = mujoco.MjData(self.mj_model)
+        n_frames = len(self.reference)
+        ref_left_foot_pos = np.zeros((n_frames, 3))
+        ref_left_foot_quat = np.zeros((n_frames, 4))
+        ref_right_foot_pos = np.zeros((n_frames, 3))
+        ref_right_foot_quat = np.zeros((n_frames, 4))
+        ref_left_palm_pos = np.zeros((n_frames, 3))
+        ref_left_palm_quat = np.zeros((n_frames, 4))
+        ref_right_palm_pos = np.zeros((n_frames, 3))
+        ref_right_palm_quat = np.zeros((n_frames, 4))
+
+        for i in range(n_frames):
+            mj_data.qpos[:] = self.reference[i]
+            mujoco.mj_forward(self.mj_model, mj_data)
+            ref_left_foot_pos[i] = mj_data.site_xpos[self.mj_model.site("left_foot").id]
+            ref_right_foot_pos[i] = mj_data.site_xpos[self.mj_model.site("right_foot").id]
+            ref_left_foot_pos[i, 2] = 0.035
+            ref_right_foot_pos[i, 2] = 0.035
+            mujoco.mju_mat2Quat(
+                ref_left_foot_quat[i],
+                mj_data.site_xmat[self.mj_model.site("left_foot").id].flatten(),
+            )
+            mujoco.mju_mat2Quat(
+                ref_right_foot_quat[i],
+                mj_data.site_xmat[self.mj_model.site("right_foot").id].flatten(),
+            )
+            ref_left_palm_pos[i] = mj_data.site_xpos[self.mj_model.site("left_hand").id]
+            ref_right_palm_pos[i] = mj_data.site_xpos[self.mj_model.site("right_hand").id]
+            mujoco.mju_mat2Quat(
+                ref_left_palm_quat[i],
+                mj_data.site_xmat[self.mj_model.site("left_hand").id].flatten(),
+            )
+            mujoco.mju_mat2Quat(
+                ref_right_palm_quat[i],
+                mj_data.site_xmat[self.mj_model.site("right_hand").id].flatten(),
+            )
+
+        # Update the jax arrays
+        self.ref_left_foot_pos = jnp.array(ref_left_foot_pos)
+        self.ref_left_foot_quat = jnp.array(ref_left_foot_quat)
+        self.ref_right_foot_pos = jnp.array(ref_right_foot_pos)
+        self.ref_right_foot_quat = jnp.array(ref_right_foot_quat)
+        self.ref_left_palm_pos = jnp.array(ref_left_palm_pos)
+        self.ref_left_palm_quat = jnp.array(ref_left_palm_quat)
+        self.ref_right_palm_pos = jnp.array(ref_right_palm_pos)
+        self.ref_right_palm_quat = jnp.array(ref_right_palm_quat)
+
+        print("✅ Dynamic reference trajectory successfully aligned.")
+
+        # Return the first frame of the new reference as the "ghost pose" target
+        return self.reference[0]
+
+    def calculate_and_store_initial_offset(self, initial_qpos: np.ndarray):
+        """
+        Calculates and stores the decoupled offset (x, y, yaw) between the robot's
+        initial state and the reference trajectory's start. This is used for the 
+        'state_to_origin' alignment mode.
+        """
+        print("🔬 Calculating initial state offset for 'state_to_origin' alignment...")
+
+        # 1. Get the initial state's decoupled quantities (X, Y, Yaw)
+        initial_base_xy = initial_qpos[:2]
+        initial_quat_wxyz = initial_qpos[3:7]
+        initial_yaw = R.from_quat([initial_quat_wxyz[1], initial_quat_wxyz[2], initial_quat_wxyz[3], initial_quat_wxyz[0]]).as_euler('xyz')[2]
+
+        # 2. Get the same quantities from the first frame of the reference trajectory
+        ref_qpos_first_frame = np.array(self.reference[0])
+        ref_base_xy_first_frame = ref_qpos_first_frame[:2]
+        ref_quat_wxyz_first_frame = ref_qpos_first_frame[3:7]
+        ref_yaw_first_frame = R.from_quat([ref_quat_wxyz_first_frame[1], ref_quat_wxyz_first_frame[2], ref_quat_wxyz_first_frame[3], ref_quat_wxyz_first_frame[0]]).as_euler('xyz')[2]
+
+        # 3. Calculate and store the required offsets
+        self.xy_offset = initial_base_xy - ref_base_xy_first_frame
+        self.yaw_offset = initial_yaw - ref_yaw_first_frame
+        # Normalize yaw_offset to [-pi, pi]
+        self.yaw_offset = (self.yaw_offset + np.pi) % (2 * np.pi) - np.pi
+        
+        # Store the inverse rotation for applying the transform
+        self.inv_yaw_rotation = R.from_euler('z', -self.yaw_offset)
+        
+        print(f"   Stored offsets: dX={self.xy_offset[0]:.3f}, dY={self.xy_offset[1]:.3f}, dYaw={np.rad2deg(self.yaw_offset):.2f}°")
+
+
+    def align_state_to_origin(self, qpos: np.ndarray, qvel: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Transforms the given state (qpos, qvel) by subtracting the initial offset,
+        effectively moving it to the reference trajectory's coordinate frame.
+        """
+        if self.xy_offset is None:
+            return qpos, qvel
+
+        aligned_qpos = np.copy(qpos)
+        aligned_qvel = np.copy(qvel)
+
+        # --- Transform qpos ---
+        # 1. Subtract the XY position offset
+        aligned_qpos[0:2] -= self.xy_offset
+
+        # 2. Subtract the Yaw orientation offset
+        current_quat_wxyz = qpos[3:7]
+        current_rot = R.from_quat([current_quat_wxyz[1], current_quat_wxyz[2], current_quat_wxyz[3], current_quat_wxyz[0]])
+        aligned_rot = self.inv_yaw_rotation * current_rot
+        aligned_quat_xyzw = aligned_rot.as_quat()
+        aligned_qpos[3:7] = [aligned_quat_xyzw[3], aligned_quat_xyzw[0], aligned_quat_xyzw[1], aligned_quat_xyzw[2]]
+
+        # --- Transform qvel ---
+        # Velocities must also be rotated into the new frame.
+        current_vel_xyz = qvel[:3]
+        current_ang_vel_xyz = qvel[3:6]
+        
+        aligned_qvel[:3] = self.inv_yaw_rotation.apply(current_vel_xyz)
+        aligned_qvel[3:6] = self.inv_yaw_rotation.apply(current_ang_vel_xyz)
+        
+        return aligned_qpos, aligned_qvel
+
+    def transform_action_to_world_frame(self, action_qpos: np.ndarray) -> np.ndarray:
+        """
+        Transforms a control action (target qpos) from the reference origin frame 
+        back to the world frame. This is the inverse of align_state_to_origin.
+        """
+        if self.initial_ref_pose_inv_rot is None:
+            return action_qpos # No transform stored, return as is
+
+        world_action_qpos = np.copy(action_qpos)
+        
+        # Decompose the action in the origin frame
+        action_pos_xy = action_qpos[:2]
+        action_quat_wxyz = action_qpos[3:7]
+        action_rot = R.from_quat([action_quat_wxyz[1], action_quat_wxyz[2], action_quat_wxyz[3], action_quat_wxyz[0]])
+        
+        # Get the original reference frame rotation (inverse of the inverse)
+        ref_rot = self.initial_ref_pose_inv_rot.inv()
+
+        # --- Transform position from origin frame back to world frame ---
+        action_pos_vec_origin = np.array([action_pos_xy[0], action_pos_xy[1], 0])
+        pos_vec_world_offset = ref_rot.apply(action_pos_vec_origin)
+        
+        world_action_qpos[0] = pos_vec_world_offset[0] + self.initial_ref_pose_pos[0]
+        world_action_qpos[1] = pos_vec_world_offset[1] + self.initial_ref_pose_pos[1]
+        
+        # --- Transform orientation from origin frame back to world frame ---
+        world_rot = ref_rot * action_rot
+        world_quat_xyzw = world_rot.as_quat()
+        world_action_qpos[3:7] = [world_quat_xyzw[3], world_quat_xyzw[0], world_quat_xyzw[1], world_quat_xyzw[2]]
+
+        return world_action_qpos
 
     def _get_reference_configuration(self, t: jax.Array) -> jax.Array:
         """Get the reference position (q) at time t."""

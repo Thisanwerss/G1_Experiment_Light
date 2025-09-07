@@ -28,6 +28,7 @@ import jax.numpy as jnp
 from mujoco import mjx
 import pytorch_lightning as pl
 import zmq
+from scipy.spatial.transform import Rotation as R
 
 from hydrax.algs import CEM
 from hydrax.tasks.humanoid_standonly import HumanoidStand
@@ -260,6 +261,7 @@ class AsyncControllerService:
         self.current_request = None
         self.running = False
         self.cycle_id = 0
+        self.is_initialized = False
         
         # 11. Enhanced timing statistics
         self.timing_history = []
@@ -277,6 +279,25 @@ class AsyncControllerService:
         self.ctrl_compute_stats = OutlierFilteredStats()
         self.ctrl_send_stats = OutlierFilteredStats()
         self.cycle_latency_stats = OutlierFilteredStats()
+        
+    def _deferred_initialize_and_warmup(self, initial_qpos: np.ndarray):
+        """
+        Performs the JIT-sensitive parts of initialization after receiving the first state.
+        """
+        print("\n--- Deferred Initialization and JIT Warmup ---")
+        # 1. Create a single, static reference pose aligned to the robot's initial state
+        # This new method implements the "averaging" logic.
+        self.task.create_aligned_static_reference(initial_qpos)
+        
+        # All previous alignment logic is now handled inside the new method.
+        # self._align_target_qpos_to_current_state(initial_qpos) is no longer needed.
+        # self.task.set_reference_qpos(...) is now called inside create_aligned_static_reference.
+
+        # 2. Initialize dummy state and JAX data using the initial state
+        print("🎭 Initializing JAX data with the received robot state...")
+        self.mj_data.qpos[:] = initial_qpos
+        mujoco.mj_forward(self.mj_model, self.mj_data)
+        self.mjx_data = mjx.put_data(self.mj_model, self.mj_data)
         
     def compute_controls(
         self, 
