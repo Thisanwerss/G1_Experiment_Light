@@ -2,7 +2,9 @@ import time
 import numpy as np
 import mujoco
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
+import json
+import os
 
 # HG series DDS message imports
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
@@ -32,6 +34,13 @@ HG_TOPIC_HANDSTATE = "rt/handstate"
 # Note: G1 doesn't have SportModeState and WirelessController, these features are implemented through other means
 
 
+def load_global_config():
+    """Load global configuration from JSON file"""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "global_config.json")
+    with open(config_path, 'r') as f:
+        return json.load(f)
+
+
 class HGSafetyLayer(SafetyLayer):
     """G1 specific safety layer - inherits from base SafetyLayer, adds torque limiting based on PD gains and position errors"""
     
@@ -44,60 +53,94 @@ class HGSafetyLayer(SafetyLayer):
             robot_config: G1 robot configuration (G1.py module), if None uses G1 default configuration
             conservative_safety: Whether to use more conservative safety limits
         """
+        # Load global configuration
+        self.global_config = load_global_config()
+        
         # Initialize base SafetyLayer, passing the conservative flag
         super().__init__(mj_model, conservative_safety=conservative_safety, num_active_joints=NUM_ACTIVE_BODY_JOINTS)
         
         self.robot_config = robot_config
         self.conservative_safety = conservative_safety
         
-        # G1 specific safety parameters
+        # Load safety parameters from configuration
+        safety_mode = "conservative_mode" if conservative_safety else "default_mode"
+        safety_config = self.global_config["safety_config"][safety_mode]
+        
         if self.conservative_safety:
             print("============================================================")
             print("🛡️ Safety layer entered [Conservative Mode] - All safety thresholds are tightened! 🛡️")
             print("============================================================")
-            self.max_position_error = 0.2  # Stricter position error (rad)
-        else:
-            self.max_position_error = 0.5   # Maximum position error (rad)
+        
+        self.max_position_error = safety_config["max_position_error"]
+        self.torque_static_scale = safety_config["torque_static_scale"]
+        self.torque_mode_scale = safety_config["torque_mode_scale"]
+        self.joint_limit_static_scale = safety_config["joint_limit_static_scale"]
+        self.joint_limit_mode_scale = safety_config["joint_limit_mode_scale"]
 
         # Re-setup G1 specific torque limits, overriding base class settings
         self._setup_g1_torque_limits()
+        # Setup G1 specific joint limits with scaling
+        self._setup_g1_joint_limits()
         
     def _setup_g1_torque_limits(self):
-        """Setup torque limits for each joint based on G1 configuration, overriding base class torque_limits"""
+        """Setup torque limits for each joint based on global configuration"""
         # Clear base class torque limits, use G1 specific settings
         self.torque_limits.clear()
-        # Set torque scaling factor to reduce all torque limits
-        if self.conservative_safety:
-            torque_scale_factor = 0.2 # More conservative
-        else:
-            torque_scale_factor = 0.5  # Can adjust this value to scale all torque limits
         
-        # Body joint torque limits
-        for mj_idx, dds_idx in BODY_MUJOCO_TO_DDS.items():
-            if mj_idx < NUM_ACTIVE_BODY_JOINTS:  # 27 active body joints
-                # Set different torque limits based on joint type
-                if mj_idx < 12:  # leg joints (0-11)
-                    if mj_idx % 6 in [0, 1, 2]:  # hip joints
-                        max_torque = 88.0
-                    elif mj_idx % 6 == 3:  # knee joint
-                        max_torque = 139.0
-                    else:  # ankle joints
-                        max_torque = 50.0
-                elif mj_idx == 12:  # waist
-                    max_torque = 88.0
-                else:  # arm joints (13-26)
-                    if mj_idx <= 19:  # left arm elbow joint and above
-                        max_torque = 25.0
-                    elif mj_idx <= 21:  # left arm wrist joint
-                        max_torque = 5.0
-                    elif mj_idx <= 26:  # right arm elbow joint and above
-                        max_torque = 25.0
-                    else:  # right arm wrist joint
-                        max_torque = 5.0
-                
-                self.torque_limits[dds_idx] = max_torque * 0.6 * torque_scale_factor  # 90% safety margin + scaling factor
+        joint_config = self.global_config["g1_joint_config"]
+        total_scale_factor = self.torque_static_scale * self.torque_mode_scale
         
-        print(f"✅ G1 Safety Layer: Set torque limits for {len(self.torque_limits)} joints (scale factor: {torque_scale_factor})")
+        for joint_name, config in joint_config.items():
+            mj_idx = config["mujoco_index"]
+            dds_idx = config["dds_index"]
+            max_torque = config["max_torque"]
+            
+            if mj_idx < NUM_ACTIVE_BODY_JOINTS:
+                self.torque_limits[dds_idx] = max_torque * total_scale_factor
+        
+        print(f"✅ G1 Safety Layer: Set torque limits for {len(self.torque_limits)} joints (total scale: {total_scale_factor:.3f})")
+
+    def get_joint_limits_from_model(self) -> Dict[int, Tuple[float, float]]:
+        """Helper to read raw joint limits from the MuJoCo model."""
+        limits = {}
+        base_dofs = 6  # Floating base
+        for id in range(self.mj_model.njnt):
+            if self.mj_model.jnt_limited[id]:
+                dof = int(self.mj_model.joint(id).dofadr)
+                if dof >= base_dofs:
+                    relative_joint_id = dof - base_dofs
+                    if relative_joint_id < NUM_ACTIVE_BODY_JOINTS:
+                        min_val = self.mj_model.jnt_range[id][0]
+                        max_val = self.mj_model.jnt_range[id][1]
+                        limits[relative_joint_id] = (min_val, max_val)
+        return limits
+
+    def _setup_g1_joint_limits(self):
+        """
+        Reads the original joint limits from the MuJoCo model and applies scaling factors.
+        This allows for dynamically tightening the operational range of joints for added safety.
+        """
+        total_scale_factor = self.joint_limit_static_scale * self.joint_limit_mode_scale
+
+        original_limits = self.get_joint_limits_from_model()
+        self.joint_limits.clear()
+
+        for joint_id, (q_min, q_max) in original_limits.items():
+            # For symmetric ranges, scale them towards zero
+            if np.isclose(q_min, -q_max):
+                scaled_min = q_min * total_scale_factor
+                scaled_max = q_max * total_scale_factor
+            else:
+                # For asymmetric ranges, shrink the range towards its center
+                center = (q_min + q_max) / 2
+                span = (q_max - q_min) / 2
+                scaled_span = span * total_scale_factor
+                scaled_min = center - scaled_span
+                scaled_max = center + scaled_span
+
+            self.joint_limits[joint_id] = (scaled_min, scaled_max)
+
+        print(f"✅ G1 Safety Layer: Set scaled joint limits for {len(self.joint_limits)} joints (total scale: {total_scale_factor:.2f})")
     
     def check_safety(self, q_current: np.ndarray, q_target: np.ndarray, 
                     kp_gains: np.ndarray, base_quaternion: np.ndarray) -> bool:
@@ -286,6 +329,9 @@ class HGSDKController(HGSDKControllerBase):
         self.kp_scale_factor = kp_scale_factor
         print(f"✅ G1 Kp scale factor: {self.kp_scale_factor}")
         
+        # Load global configuration
+        self.global_config = load_global_config()
+        
         # If Vicon is required but not provided, raise exception
         if self.vicon_required and not simulate:
             print("Vicon is required. Setting up subscribers...")
@@ -442,24 +488,16 @@ class HGSDKController(HGSDKControllerBase):
                 self.cmd.motor_cmd[dds_idx].tau = 0.0  # Don't use feedforward torque
     
     def _get_joint_gains(self, mj_idx: int) -> tuple:
-        """Get PD gains for specified joint"""
-        kp = 0.0
-        if mj_idx < 12:  # leg joints
-            if mj_idx % 6 in [0, 1, 2]:  # hip joints
-                kp = 60.0
-            elif mj_idx % 6 == 3:  # knee joint
-                kp = 100.0
-            else:  # ankle joints
-                kp = 40.0
-        elif mj_idx == 12:  # waist
-            kp = WAIST_KP
-        else:  # arm joints
-            if mj_idx <= 19:  # elbow joint and above
-                kp = 40.0
-            else:  # wrist joint
-                kp = 20.0
+        """Get PD gains for specified joint from global configuration"""
+        joint_config = self.global_config["g1_joint_config"]
         
-        return (kp * self.kp_scale_factor, Kd)
+        # Find the joint name by mujoco index
+        for joint_name, config in joint_config.items():
+            if config["mujoco_index"] == mj_idx:
+                return (config["kp"] * self.kp_scale_factor, config["kd"])
+        
+        # Fallback to default values if joint not found
+        return (0.0, 3.0)
     
     def _get_current_body_positions(self) -> np.ndarray:
         """Get current body joint positions"""

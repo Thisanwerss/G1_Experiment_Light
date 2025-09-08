@@ -37,6 +37,7 @@ import os
 import glob
 import mujoco
 from typing import Dict, Any, List, Tuple, Optional
+import json
 
 # To import the safety layer and robot config, we need to adjust the path
 import sys
@@ -46,6 +47,12 @@ from sdk_controller.abstract_biped import HGSafetyLayer
 from sdk_controller.robots.G1 import NUM_ACTIVE_BODY_JOINTS, MUJOCO_JOINT_NAMES, WAIST_KP, Kd
 
 
+def load_global_config():
+    """Load global configuration from JSON file"""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_config.json")
+    with open(config_path, 'r') as f:
+        return json.load(f)
+
 
 class LogAnalyzer:
     """Analyzes a simulation log file."""
@@ -53,6 +60,7 @@ class LogAnalyzer:
     def __init__(self, log_data: Dict[str, Any]):
         self.log_data = log_data
         self.metadata = self.log_data['metadata']
+        self.global_config = load_global_config()
         print("✅ Log data loaded successfully.")
         print(f"   Timestamp: {self.metadata['timestamp']}")
         print(f"   Mode: {self.metadata['mode']}")
@@ -105,21 +113,16 @@ class LogAnalyzer:
 
     def _get_kp_gains(self, kp_scale_factor: float = 1.0) -> np.ndarray:
         """
-        Replicates the Kp gain calculation from the controller.
-        This is necessary to simulate the safety layer's potential torque checks.
+        Get Kp gains from global configuration.
         """
         gains = np.zeros(NUM_ACTIVE_BODY_JOINTS)
-        for mj_idx in range(NUM_ACTIVE_BODY_JOINTS):
-            kp = 0.0
-            if mj_idx < 12:  # leg joints
-                if mj_idx % 6 in [0, 1, 2]: kp = 60.0   # hip
-                elif mj_idx % 6 == 3: kp = 100.0        # knee
-                else: kp = 40.0                         # ankle
-            elif mj_idx == 12: kp = WAIST_KP             # waist
-            else:  # arm joints
-                if mj_idx <= 19 or (mj_idx >= 22 and mj_idx <=25) : kp = 40.0 # shoulder/elbow
-                else: kp = 20.0 # wrist
-            gains[mj_idx] = kp * kp_scale_factor
+        joint_config = self.global_config["g1_joint_config"]
+        
+        for joint_name, config in joint_config.items():
+            mj_idx = config["mujoco_index"]
+            if mj_idx < NUM_ACTIVE_BODY_JOINTS:
+                gains[mj_idx] = config["kp"] * kp_scale_factor
+                
         return gains
 
     def run_safety_analysis(self) -> Dict[str, List[Dict[str, Any]]]:
@@ -173,66 +176,136 @@ class LogAnalyzer:
             qpos_idx = 7 + joint_mj_idx
             qvel_idx = 6 + joint_mj_idx
             
-            fig, axs = plt.subplots(4, 1, figsize=(15, 20), sharex=True)
-            fig.suptitle(f"Analysis for Joint: {joint_name} (MuJoCo Index: {joint_mj_idx})", fontsize=16)
+            # Create a 4x2 subplot grid: 4 metrics, 2 modes (Default vs. Conservative)
+            fig, axs = plt.subplots(4, 2, figsize=(25, 20), sharex=True)
+            fig.suptitle(f"Analysis for Joint: {joint_name} (MuJoCo Index: {joint_mj_idx})", fontsize=18)
 
-            # 1. Position Plot
-            axs[0].plot(self.time, self.qpos[:, qpos_idx], label='Actual Position (qpos)')
-            axs[0].plot(self.time, self.pd_targets[:, joint_mj_idx], label='Target Position (PD)', linestyle='--')
-            # Plot joint limits from safety layer
+            # Set column titles
+            axs[0, 0].set_title("Default Mode", fontsize=14)
+            axs[0, 1].set_title("Conservative Mode", fontsize=14)
+
+            # --- 1. Position Plot (Row 0) ---
+            pos_ax_def, pos_ax_con = axs[0, 0], axs[0, 1]
+            pos_ax_def.plot(self.time, self.qpos[:, qpos_idx], label='Actual Position')
+            pos_ax_def.plot(self.time, self.pd_targets[:, joint_mj_idx], label='Target Position', linestyle='--')
+            pos_ax_con.plot(self.time, self.qpos[:, qpos_idx], label='Actual Position')
+            pos_ax_con.plot(self.time, self.pd_targets[:, joint_mj_idx], label='Target Position', linestyle='--')
+            
+            # Plot joint limits from each safety layer
             if joint_mj_idx in self.safety_layer_default.joint_limits:
                 min_lim, max_lim = self.safety_layer_default.joint_limits[joint_mj_idx]
-                axs[0].axhline(y=min_lim, color='r', linestyle=':', label=f'Joint Limit (Default: {min_lim:.2f})')
-                axs[0].axhline(y=max_lim, color='r', linestyle=':', label=f'Joint Limit (Default: {max_lim:.2f})')
-            axs[0].set_ylabel("Position (rad)")
-            axs[0].legend()
-            axs[0].grid(True)
-            
-            # 2. Velocity Plot
-            axs[1].plot(self.time, self.qvel[:, qvel_idx], label='Actual Velocity (qvel)')
-            axs[1].set_ylabel("Velocity (rad/s)")
-            axs[1].legend()
-            axs[1].grid(True)
-            
-            # 3. Actuator Force/Torque Plot
-            axs[2].plot(self.time, self.actuator_force[:, joint_mj_idx], label='Actual Torque')
-            # Plot torque limits
-            # Note: torque limits are mapped by DDS id, need to find it.
-            # This is complex, so for now we check potential torque instead. A simple placeholder:
-            act_id = joint_mj_idx # In our case mj_idx and act_id are the same for body joints
-            if act_id in self.safety_layer_default.torque_limits:
-                max_torque = self.safety_layer_default.torque_limits[act_id]
-                axs[2].axhline(y=max_torque, color='r', linestyle=':', label=f'Torque Limit (Default: {max_torque:.1f})')
-                axs[2].axhline(y=-max_torque, color='r', linestyle=':')
-            axs[2].set_ylabel("Torque (Nm)")
-            axs[2].legend()
-            axs[2].grid(True)
+                pos_ax_def.axhline(y=min_lim, color='r', linestyle=':', label=f'Limit ({min_lim:.2f})')
+                pos_ax_def.axhline(y=max_lim, color='r', linestyle=':')
+            if joint_mj_idx in self.safety_layer_conservative.joint_limits:
+                min_lim, max_lim = self.safety_layer_conservative.joint_limits[joint_mj_idx]
+                pos_ax_con.axhline(y=min_lim, color='r', linestyle=':', label=f'Limit ({min_lim:.2f})')
+                pos_ax_con.axhline(y=max_lim, color='r', linestyle=':')
+            pos_ax_def.set_ylabel("Position (rad)")
 
-            # 4. Position Error Plot
+            # --- 2. Velocity Plot (Row 1) ---
+            vel_ax_def, vel_ax_con = axs[1, 0], axs[1, 1]
+            vel_ax_def.plot(self.time, self.qvel[:, qvel_idx], label='Actual Velocity')
+            vel_ax_con.plot(self.time, self.qvel[:, qvel_idx], label='Actual Velocity')
+            vel_ax_def.set_ylabel("Velocity (rad/s)")
+            
+            # --- 3. Actuator Force/Torque Plot (Row 2) ---
+            torque_ax_def, torque_ax_con = axs[2, 0], axs[2, 1]
+            torque_ax_def.plot(self.time, self.actuator_force[:, joint_mj_idx], label='Actual Torque')
+            torque_ax_con.plot(self.time, self.actuator_force[:, joint_mj_idx], label='Actual Torque')
+            
+            # Calculate and plot potential torque
+            kp_gains = self._get_kp_gains()
+            kp = kp_gains[joint_mj_idx]
+            pos_error_for_torque = self.pd_targets[:, joint_mj_idx] - self.qpos[:, qpos_idx]
+            potential_torque = kp * pos_error_for_torque
+            
+            torque_ax_def.plot(self.time, potential_torque, label='Potential Torque', linestyle='--', color='purple', alpha=0.8)
+            torque_ax_con.plot(self.time, potential_torque, label='Potential Torque', linestyle='--', color='purple', alpha=0.8)
+
+            # Get the correct DDS index for this joint
+            joint_config = self.global_config["g1_joint_config"]
+            dds_idx = joint_config[joint_name]["dds_index"]
+            
+            if dds_idx in self.safety_layer_default.torque_limits:
+                max_torque = self.safety_layer_default.torque_limits[dds_idx]
+                torque_ax_def.axhline(y=max_torque, color='r', linestyle=':', label=f'Torque Limit ({max_torque:.1f})')
+                torque_ax_def.axhline(y=-max_torque, color='r', linestyle=':')
+            if dds_idx in self.safety_layer_conservative.torque_limits:
+                max_torque = self.safety_layer_conservative.torque_limits[dds_idx]
+                torque_ax_con.axhline(y=max_torque, color='r', linestyle=':', label=f'Torque Limit ({max_torque:.1f})')
+                torque_ax_con.axhline(y=-max_torque, color='r', linestyle=':')
+            torque_ax_def.set_ylabel("Torque (Nm)")
+
+            # --- 4. Position Error Plot (Row 3) ---
+            error_ax_def, error_ax_con = axs[3, 0], axs[3, 1]
             pos_error = self.pd_targets[:, joint_mj_idx] - self.qpos[:, qpos_idx]
-            axs[3].plot(self.time, pos_error, label='Position Error (target - actual)')
-            # Plot error limits
+            error_ax_def.plot(self.time, pos_error, label='Position Error (target - actual)')
+            error_ax_con.plot(self.time, pos_error, label='Position Error (target - actual)')
+
             max_err_def = self.safety_layer_default.max_position_error
             max_err_con = self.safety_layer_conservative.max_position_error
-            axs[3].axhline(y=max_err_def, color='orange', linestyle=':', label=f'Error Limit (Default: {max_err_def:.2f})')
-            axs[3].axhline(y=-max_err_def, color='orange', linestyle=':')
-            axs[3].axhline(y=max_err_con, color='red', linestyle=':', label=f'Error Limit (Conservative: {max_err_con:.2f})')
-            axs[3].axhline(y=-max_err_con, color='red', linestyle=':')
-            axs[3].set_ylabel("Position Error (rad)")
-            axs[3].set_xlabel("Time (s)")
-            axs[3].legend()
-            axs[3].grid(True)
+            error_ax_def.axhline(y=max_err_def, color='orange', linestyle=':', label=f'Error Limit ({max_err_def:.2f})')
+            error_ax_def.axhline(y=-max_err_def, color='orange', linestyle=':')
+            error_ax_con.axhline(y=max_err_con, color='red', linestyle=':', label=f'Error Limit ({max_err_con:.2f})')
+            error_ax_con.axhline(y=-max_err_con, color='red', linestyle=':')
+            error_ax_def.set_ylabel("Position Error (rad)")
             
-            # Add violation markers
-            for v_event in violations['default']:
-                for reason in v_event['reasons']:
-                    if reason.get('joint_name') == joint_name or reason.get('actuator_name') == joint_name:
-                        axs[0].axvline(x=v_event['time'], color='orange', linestyle='--', alpha=0.7)
-                        axs[1].axvline(x=v_event['time'], color='orange', linestyle='--', alpha=0.7)
-                        axs[2].axvline(x=v_event['time'], color='orange', linestyle='--', alpha=0.7)
-                        axs[3].axvline(x=v_event['time'], color='orange', linestyle='--', alpha=0.7)
+            # --- Add violation markers and finalize plots ---
+            
+            # Get unique violation times for this joint
+            default_violation_times = sorted(list(set(
+                v['time'] for v in violations['default']
+                for r in v['reasons']
+                if r.get('joint_name') == joint_name or r.get('actuator_name') == joint_name
+            )))
 
-            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            conservative_violation_times = sorted(list(set(
+                v['time'] for v in violations['conservative']
+                for r in v['reasons']
+                if r.get('joint_name') == joint_name or r.get('actuator_name') == joint_name
+            )))
+
+            if self.time.size > 1:
+                time_to_idx = {t: i for i, t in enumerate(self.time)}
+                
+                # Plot conservative violations (red) on the RIGHT column
+                for t in conservative_violation_times:
+                    if t in time_to_idx:
+                        idx = time_to_idx[t]
+                        start_time = self.time[idx]
+                        end_time = self.time[idx + 1] if idx + 1 < len(self.time) else start_time + (self.time[idx] - self.time[idx - 1])
+                        for i in range(4):
+                            axs[i, 1].axvspan(start_time, end_time, color='red', alpha=0.3, linewidth=0)
+
+                # Plot default violations (orange) on the LEFT column
+                for t in default_violation_times:
+                    if t in time_to_idx:
+                        idx = time_to_idx[t]
+                        start_time = self.time[idx]
+                        end_time = self.time[idx + 1] if idx + 1 < len(self.time) else start_time + (self.time[idx] - self.time[idx - 1])
+                        for i in range(4):
+                            axs[i, 0].axvspan(start_time, end_time, color='orange', alpha=0.3, linewidth=0)
+            
+            import matplotlib.patches as mpatches
+            for i in range(4):
+                # Left (Default) column
+                h_d, l_d = axs[i, 0].get_legend_handles_labels()
+                if default_violation_times:
+                    h_d.append(mpatches.Patch(color='orange', alpha=0.3, label='Default Violation'))
+                axs[i, 0].legend(handles=h_d)
+                axs[i, 0].grid(True)
+
+                # Right (Conservative) column
+                h_c, l_c = axs[i, 1].get_legend_handles_labels()
+                if conservative_violation_times:
+                    h_c.append(mpatches.Patch(color='red', alpha=0.3, label='Conservative Violation'))
+                axs[i, 1].legend(handles=h_c)
+                axs[i, 1].grid(True)
+            
+            axs[3, 0].set_xlabel("Time (s)")
+            axs[3, 1].set_xlabel("Time (s)")
+
+            plt.tight_layout(rect=[0, 0.03, 1, 0.97])
             plt.savefig(f"{output_dir}/{joint_mj_idx:02d}_{joint_name}.png")
             plt.close()
         
@@ -240,6 +313,36 @@ class LogAnalyzer:
 
     def print_summary_report(self, violations: Dict[str, List[Dict[str, Any]]]):
         """Prints a summary of the analysis."""
+        print("\n--- Detailed Violation Log (Max 5 per type) ---")
+        print_counts = {}
+        joint_name_to_idx = {name: i for i, name in enumerate(MUJOCO_JOINT_NAMES)}
+
+        # Prioritize printing default mode violations first
+        modes_to_print = ['default', 'conservative']
+        for mode in modes_to_print:
+            v_events = violations.get(mode, [])
+            for v_event in v_events:
+                for reason in v_event['reasons']:
+                    joint_name = reason.get('joint_name') or reason.get('actuator_name') or 'Base'
+                    reason_type = reason['type']
+                    
+                    key = (joint_name, mode, reason_type)
+                    count = print_counts.get(key, 0)
+
+                    if count < 5:
+                        idx = joint_name_to_idx.get(joint_name, 'N/A')
+                        value = reason.get('value', 'N/A')
+                        limit = reason.get('limit', 'N/A')
+                        time = v_event['time']
+
+                        # Format value and limit for clean printing
+                        value_str = f"{value:.3f}" if isinstance(value, (int, float)) else str(value)
+                        limit_str = f"{limit:.3f}" if isinstance(limit, (int, float)) else str(limit)
+                        
+                        print(f"ERROR: Joint {idx} ({joint_name}) | {mode.upper()} | {reason_type} violated at t={time:.2f}s, because Value {value_str} > Limit {limit_str}")
+                        
+                        print_counts[key] = count + 1
+
         print("\n--- Analysis Summary Report ---")
         
         # Print violation details

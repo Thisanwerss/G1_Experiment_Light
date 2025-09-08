@@ -1,5 +1,214 @@
 {
-  "vicon_z_offset": -0.23
+  "vicon_z_offset": -0.23,
+  "g1_joint_config": {
+    "left_hip_pitch_joint": {
+      "mujoco_index": 0,
+      "dds_index": 0,
+      "max_torque": 88.0,
+      "kp": 60.0,
+      "kd": 3.0
+    },
+    "left_hip_roll_joint": {
+      "mujoco_index": 1,
+      "dds_index": 1,
+      "max_torque": 88.0,
+      "kp": 60.0,
+      "kd": 3.0
+    },
+    "left_hip_yaw_joint": {
+      "mujoco_index": 2,
+      "dds_index": 2,
+      "max_torque": 88.0,
+      "kp": 60.0,
+      "kd": 3.0
+    },
+    "left_knee_joint": {
+      "mujoco_index": 3,
+      "dds_index": 3,
+      "max_torque": 139.0,
+      "kp": 100.0,
+      "kd": 3.0
+    },
+    "left_ankle_pitch_joint": {
+      "mujoco_index": 4,
+      "dds_index": 4,
+      "max_torque": 50.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "left_ankle_roll_joint": {
+      "mujoco_index": 5,
+      "dds_index": 5,
+      "max_torque": 50.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "right_hip_pitch_joint": {
+      "mujoco_index": 6,
+      "dds_index": 6,
+      "max_torque": 88.0,
+      "kp": 60.0,
+      "kd": 3.0
+    },
+    "right_hip_roll_joint": {
+      "mujoco_index": 7,
+      "dds_index": 7,
+      "max_torque": 88.0,
+      "kp": 60.0,
+      "kd": 3.0
+    },
+    "right_hip_yaw_joint": {
+      "mujoco_index": 8,
+      "dds_index": 8,
+      "max_torque": 88.0,
+      "kp": 60.0,
+      "kd": 3.0
+    },
+    "right_knee_joint": {
+      "mujoco_index": 9,
+      "dds_index": 9,
+      "max_torque": 139.0,
+      "kp": 100.0,
+      "kd": 3.0
+    },
+    "right_ankle_pitch_joint": {
+      "mujoco_index": 10,
+      "dds_index": 10,
+      "max_torque": 50.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "right_ankle_roll_joint": {
+      "mujoco_index": 11,
+      "dds_index": 11,
+      "max_torque": 50.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "waist_yaw_joint": {
+      "mujoco_index": 12,
+      "dds_index": 12,
+      "max_torque": 88.0,
+      "kp": 60.0,
+      "kd": 3.0
+    },
+    "left_shoulder_pitch_joint": {
+      "mujoco_index": 13,
+      "dds_index": 15,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "left_shoulder_roll_joint": {
+      "mujoco_index": 14,
+      "dds_index": 16,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "left_shoulder_yaw_joint": {
+      "mujoco_index": 15,
+      "dds_index": 17,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "left_elbow_joint": {
+      "mujoco_index": 16,
+      "dds_index": 18,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "left_wrist_roll_joint": {
+      "mujoco_index": 17,
+      "dds_index": 19,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "left_wrist_pitch_joint": {
+      "mujoco_index": 18,
+      "dds_index": 20,
+      "max_torque": 5.0,
+      "kp": 20.0,
+      "kd": 3.0
+    },
+    "left_wrist_yaw_joint": {
+      "mujoco_index": 19,
+      "dds_index": 21,
+      "max_torque": 5.0,
+      "kp": 20.0,
+      "kd": 3.0
+    },
+    "right_shoulder_pitch_joint": {
+      "mujoco_index": 20,
+      "dds_index": 22,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "right_shoulder_roll_joint": {
+      "mujoco_index": 21,
+      "dds_index": 23,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "right_shoulder_yaw_joint": {
+      "mujoco_index": 22,
+      "dds_index": 24,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "right_elbow_joint": {
+      "mujoco_index": 23,
+      "dds_index": 25,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "right_wrist_roll_joint": {
+      "mujoco_index": 24,
+      "dds_index": 26,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "right_wrist_pitch_joint": {
+      "mujoco_index": 25,
+      "dds_index": 27,
+      "max_torque": 25.0,
+      "kp": 40.0,
+      "kd": 3.0
+    },
+    "right_wrist_yaw_joint": {
+      "mujoco_index": 26,
+      "dds_index": 28,
+      "max_torque": 5.0,
+      "kp": 20.0,
+      "kd": 3.0
+    }
+  },
+  "safety_config": {
+    "default_mode": {
+      "torque_static_scale": 0.8,
+      "torque_mode_scale": 0.9,
+      "joint_limit_static_scale": 1.0,
+      "joint_limit_mode_scale": 1.0,
+      "max_position_error": 0.6,
+      "base_orientation_limit_deg": 35.0
+    },
+    "conservative_mode": {
+      "torque_static_scale": 0.8,
+      "torque_mode_scale": 0.7,
+      "joint_limit_static_scale": 1.0,
+      "joint_limit_mode_scale": 0.5,
+      "max_position_error": 0.5,
+      "base_orientation_limit_deg": 25.0
+    }
+  }
 } 
 
 

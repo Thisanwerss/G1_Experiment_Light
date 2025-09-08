@@ -1,5 +1,16 @@
 import numpy as np
 from dataclasses import dataclass
+import json
+import os
+
+def load_global_config():
+    """Load global configuration from JSON file"""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "global_config.json")
+    with open(config_path, 'r') as f:
+        return json.load(f)
+
+# Load global configuration
+_global_config = load_global_config()
 
 # G1 Robot Configuration
 ROBOT_NAME = "g1"
@@ -54,31 +65,42 @@ STAND_UP_JOINT_POS = np.array([
         ])  # 确保长度匹配
 
 
-# PD controller gains (based on kp values from g1_lab.xml)
-# Leg joint gains
-LEG_KP = {
-    'hip': 60.0,
-    'knee': 100.0,
-    'ankle': 40.0
-}
+# PD controller gains (loaded from global configuration)
+joint_config = _global_config["g1_joint_config"]
 
-# Arm joint gains  
-ARM_KP = {
-    'shoulder': 40.0,
-    'elbow': 40.0,
-    'wrist_roll': 40.0,
-    'wrist_pitch': 20.0,
-    'wrist_yaw': 20.0
-}
+# Extract gains for different joint types for backward compatibility
+LEG_KP = {}
+ARM_KP = {}
+WAIST_KP = 0.0
 
-# Waist joint gains
-WAIST_KP = 60.0
+# Build legacy gain dictionaries
+for joint_name, config in joint_config.items():
+    kp = config["kp"]
+    
+    if "hip" in joint_name:
+        LEG_KP["hip"] = kp
+    elif "knee" in joint_name:
+        LEG_KP["knee"] = kp
+    elif "ankle" in joint_name:
+        LEG_KP["ankle"] = kp
+    elif "waist" in joint_name:
+        WAIST_KP = kp
+    elif "shoulder" in joint_name:
+        ARM_KP["shoulder"] = kp
+    elif "elbow" in joint_name:
+        ARM_KP["elbow"] = kp
+    elif "wrist_roll" in joint_name:
+        ARM_KP["wrist_roll"] = kp
+    elif "wrist_pitch" in joint_name:
+        ARM_KP["wrist_pitch"] = kp
+    elif "wrist_yaw" in joint_name:
+        ARM_KP["wrist_yaw"] = kp
 
-# Hand joint gains
+# Hand joint gains (assuming from configuration, default to 2.0 if not found)
 HAND_KP = 2.0
 
-# Damping coefficient (general)
-Kd = 3.0
+# Damping coefficient (from configuration)
+Kd = joint_config[list(joint_config.keys())[0]]["kd"]  # Use first joint's kd value
 
 # Joint index mapping (for MuJoCo to DDS mapping)
 # MuJoCo joint order (from g1_lab.xml)
@@ -106,42 +128,11 @@ MUJOCO_JOINT_NAMES = [
     'right_hand_index_0_joint', 'right_hand_index_1_joint',
 ]
 
-# DDS motor index mapping (29DOF version, based on g1_joint_index_dds.md)
+# DDS motor index mapping (loaded from global configuration)
 # Body joint mapping: MuJoCo index -> DDS index
-BODY_MUJOCO_TO_DDS = {
-    # Left leg
-    0: 0,   # left_hip_pitch
-    1: 1,   # left_hip_roll
-    2: 2,   # left_hip_yaw
-    3: 3,   # left_knee
-    4: 4,   # left_ankle_pitch
-    5: 5,   # left_ankle_roll
-    # Right leg
-    6: 6,   # right_hip_pitch
-    7: 7,   # right_hip_roll
-    8: 8,   # right_hip_yaw
-    9: 9,   # right_knee
-    10: 10, # right_ankle_pitch
-    11: 11, # right_ankle_roll
-    # Waist
-    12: 12, # waist_yaw
-    # Left arm
-    13: 15, # left_shoulder_pitch
-    14: 16, # left_shoulder_roll
-    15: 17, # left_shoulder_yaw
-    16: 18, # left_elbow
-    17: 19, # left_wrist_roll
-    18: 20, # left_wrist_pitch
-    19: 21, # left_wrist_yaw
-    # Right arm
-    20: 22, # right_shoulder_pitch
-    21: 23, # right_shoulder_roll
-    22: 24, # right_shoulder_yaw
-    23: 25, # right_elbow
-    24: 26, # right_wrist_roll
-    25: 27, # right_wrist_pitch
-    26: 28, # right_wrist_yaw
-}
+BODY_MUJOCO_TO_DDS = {}
+for joint_name, config in joint_config.items():
+    BODY_MUJOCO_TO_DDS[config["mujoco_index"]] = config["dds_index"]
 
 # Hand joint mapping: MuJoCo index -> Hand DDS index, not actually used for control
 # Left hand
