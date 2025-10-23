@@ -611,8 +611,8 @@ def signal_handler(sig, frame):
 def main():
     parser = argparse.ArgumentParser(description="ZeroMQ-DDS 仿真桥接器")
     parser.add_argument(
-        "--init_channel", type=str, default="enp7s0",
-        help="用于获取机器人初始状态的DDS网络接口 (例如 'enp7s0')。如果未提供，则使用随机化初始状态。"
+        "--init_channel", type=str, default=load_default_interface_from_config(),
+        help=f"用于获取机器人初始状态的DDS网络接口 (默认: 从 {CONFIG_FILE} 读取)。如果未提供，则使用随机化初始状态。"
     )
     parser.add_argument("--zmq_state_port", type=int, default=5555, help="ZeroMQ 状态端口")
     parser.add_argument("--zmq_ctrl_port", type=int, default=5556, help="ZeroMQ 控制端口")

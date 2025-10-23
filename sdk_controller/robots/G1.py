@@ -34,25 +34,6 @@ CONTROL_FREQ = 100  # 100Hz control frequency
 
 
 
-# STAND_UP_JOINT_POS = np.array([
-#     # Left Leg
-#     0.0968964, -0.12121, 0.0411549, 0.0833635, -0.160106, 0.0807926,
-#     #0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-#     # Right Leg
-#     0.0054431, -0.0883059, 0.122414, 0.369962, -0.381041, 0.0785379,
-#     #0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-#     # Waist
-#     #-0.0640063,
-#     0.0,
-#     # Left Arm
-#     -0.00810865, -0.209113, 0.165738, 0.0168338, 0.198281, -0.195008, 0.0899386,
-#     # Right Arm
-#     0.0514546, 0.677822, 1.7251, -1.44205, -1.90577, -1.54437, -1.92981,
-#     # Left Hand (these are not controlled but included for completeness)
-#     -0.0127106, 0.0960897, -0.00151768, 0.236564, -0.139678, -0.51143, -0.0517731,
-#     # Right Hand (these are not controlled but included for completeness)
-#     -0.0280968, -1.00421, -1.69945, 1.52882, 1.8316, 1.55194, 1.90963
-# ], dtype=float)
 STAND_UP_JOINT_POS = np.array([
 
             0, 0, 0,     # waist joints
@@ -68,6 +49,9 @@ STAND_UP_JOINT_POS = np.array([
 # PD controller gains (loaded from global configuration)
 joint_config = _global_config["g1_joint_config"]
 
+# TODO: The following KP dictionaries (LEG_KP, ARM_KP, WAIST_KP) are a legacy implementation.
+# The code should be refactored to use the per-joint values from `joint_config` directly
+# for more precise control, instead of these broad categories.
 # Extract gains for different joint types for backward compatibility
 LEG_KP = {}
 ARM_KP = {}
@@ -99,8 +83,8 @@ for joint_name, config in joint_config.items():
 # Hand joint gains (assuming from configuration, default to 2.0 if not found)
 HAND_KP = 2.0
 
-# Damping coefficient (from configuration)
-Kd = joint_config[list(joint_config.keys())[0]]["kd"]  # Use first joint's kd value
+# Damping coefficients (loaded per joint from configuration)
+JOINT_KD = {name: config["kd"] for name, config in joint_config.items()}
 
 # Joint index mapping (for MuJoCo to DDS mapping)
 # MuJoCo joint order (from g1_lab.xml)
@@ -181,7 +165,7 @@ class G1:
     ARM_KP = ARM_KP
     WAIST_KP = WAIST_KP
     HAND_KP = HAND_KP
-    Kd = Kd
+    JOINT_KD = JOINT_KD
     MUJOCO_JOINT_NAMES = MUJOCO_JOINT_NAMES
     BODY_MUJOCO_TO_DDS = BODY_MUJOCO_TO_DDS
     LEFT_HAND_MUJOCO_TO_DDS = LEFT_HAND_MUJOCO_TO_DDS

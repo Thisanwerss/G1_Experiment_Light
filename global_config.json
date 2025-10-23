@@ -1,4 +1,8 @@
 {
+  "network_interface": "enp7s0",
+  "dummy_joint": [],
+  "Kp_scale": 1.0,
+  "Safety_Mode": "default_mode",
   "vicon_z_offset": -0.23,
   "g1_joint_config": {
     "left_hip_pitch_joint": {

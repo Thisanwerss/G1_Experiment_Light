@@ -613,12 +613,24 @@ class G1VisualizerUI(QMainWindow):
         top_panel.setFrameShape(QFrame.StyledPanel)
         top_layout = QHBoxLayout(top_panel)
 
-        self.connection_status_label = QLabel("🔴 Disconnected")
+        self.connection_status_label = QLabel("Status: Disconnected")
         self.connection_status_label.setFont(QFont("Arial", 12, QFont.Bold))
+        
+        # Channel selection
+        channel_layout = QHBoxLayout()
+        channel_layout.addWidget(QLabel("Network Interface:"))
         self.channel_combo = QComboBox()
-        self.channel_combo.addItems(["enp7s0", "lo", "eth0", "wlan0"])
-        self.channel_combo.setCurrentText("enp7s0")
-        self.channel_combo.setEditable(True)
+        
+        # Populate with common interfaces and set default from config
+        default_interface = load_default_interface_from_config()
+        common_interfaces = [default_interface, "lo", "eth0", "wlan0"]
+        # Remove duplicates by converting to a dict and back to a list
+        unique_interfaces = list(dict.fromkeys(common_interfaces))
+        self.channel_combo.addItems(unique_interfaces)
+        self.channel_combo.setCurrentText(default_interface)
+
+        channel_layout.addWidget(self.channel_combo)
+
         self.connect_button = QPushButton("Connect")
         self.show_3d_button = QPushButton("Show 3D Visualization")
         if mujoco is None:
@@ -629,8 +641,7 @@ class G1VisualizerUI(QMainWindow):
         self.hide_ui_checkbox.setChecked(True)
 
         top_layout.addWidget(self.connection_status_label)
-        top_layout.addWidget(QLabel("Network Interface:"))
-        top_layout.addWidget(self.channel_combo)
+        top_layout.addWidget(channel_layout)
         top_layout.addWidget(self.connect_button)
         top_layout.addWidget(self.show_3d_button)
         top_layout.addWidget(self.hide_ui_checkbox)
