@@ -2,6 +2,7 @@ import pyvicon_datastream as pv
 import numpy as np
 import time
 import pinocchio as pin
+import json
 
 from sdk_controller.topics import TOPIC_VICON_POSE, TOPIC_VICON_TWIST
 
@@ -10,6 +11,23 @@ from unitree_sdk2py.idl.geometry_msgs.msg.dds_ import PoseStamped_, TwistStamped
 from unitree_sdk2py.idl.std_msgs.msg.dds_ import Header_
 
 from unitree_sdk2py.utils.thread import RecurrentThread
+
+# --- 全局配置加载 ---
+try:
+    with open("global_config.json", "r") as f:
+        GLOBAL_CONFIG = json.load(f)
+    VICON_Z_OFFSET = GLOBAL_CONFIG.get("vicon_z_offset", 0.0)
+    VICON_VELOCITY_FILTER_ALPHA = GLOBAL_CONFIG.get("vicon_velocity_filter_alpha", 0.4)
+    print(f"✅ 从 global_config.json 加载配置, VICON_Z_OFFSET={VICON_Z_OFFSET}, VICON_VELOCITY_FILTER_ALPHA={VICON_VELOCITY_FILTER_ALPHA}")
+except FileNotFoundError:
+    print("⚠️ global_config.json 未找到, 使用默认值。")
+    VICON_Z_OFFSET = 0.0
+    VICON_VELOCITY_FILTER_ALPHA = 0.4
+except json.JSONDecodeError:
+    print("❌ global_config.json 解析失败, 使用默认值。")
+    VICON_Z_OFFSET = 0.0
+    VICON_VELOCITY_FILTER_ALPHA = 0.4
+
 
 class ViconPosePublisherHG:
     def __init__(self,
@@ -61,6 +79,7 @@ class ViconPosePublisherHG:
         self.p, self.prev_p, self.prev_prev_p = np.zeros(3), np.zeros(3), np.zeros(3)
         self.q, self.prev_q, self.prev_prev_q = np.array([1., 0., 0., 0.]), np.array([1., 0., 0., 0.]), np.array([1., 0., 0., 0.]) # w, x, y, z
         self.v = np.zeros(3)
+        self.prev_v = np.zeros(3)
         self.w = np.zeros(3)
         
         self.start()
@@ -110,10 +129,15 @@ class ViconPosePublisherHG:
         
     def _update_linear_velocity(self):
         # global linear velocity
-        dt = self.t - self.prev_t
-        if dt < 1e-6: return
-        # First order finite difference
-        self.v = (self.p - self.prev_p) / dt
+        # 使用二阶后向差分以提高稳定性
+        avg_dt = (self.t - self.prev_prev_t) / 2.
+        if avg_dt < 1e-6: return
+        
+        self.prev_v = self.v
+        self.v = (3 * self.p - 4 * self.prev_p + self.prev_prev_p) / (2 * avg_dt)
+
+        # 应用一个轻量的指数平滑滤波器来减少抖动
+        self.v = VICON_VELOCITY_FILTER_ALPHA * self.v + (1 - VICON_VELOCITY_FILTER_ALPHA) * self.prev_v
         
     def _update_p_q_t(self, new_p : np.ndarray, new_q : np.ndarray, new_t : float):
         # time
@@ -124,6 +148,7 @@ class ViconPosePublisherHG:
         self.prev_prev_p = self.prev_p
         self.prev_p = self.p
         self.p = new_p / 1000.
+        self.p[2] += VICON_Z_OFFSET
         # quaternion
         self.prev_prev_q = self.prev_q
         self.prev_q = self.q
@@ -159,8 +184,9 @@ class ViconPosePublisherHG:
                                 self._update_p_q_t(segment_global_translation, segment_global_quaternion, t)
 
                                 if self.prev_t > 0.:
-                                    self._update_linear_velocity()
                                     self._update_angular_velocity()
+                                if self.prev_prev_t > 0.:
+                                    self._update_linear_velocity()
                                     
                                 return True
         return False

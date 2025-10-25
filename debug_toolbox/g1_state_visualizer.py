@@ -51,16 +51,6 @@ except ImportError as e:
     print(f"⚠️ MuJoCo import failed: {e}. 3D visualization will be disabled.", file=sys.stderr)
     mujoco = None
 
-try:
-    import rclpy
-    from rclpy.node import Node
-    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-    from vicon_receiver.msg import Position
-    ROS2_AVAILABLE = True
-except (ImportError, ModuleNotFoundError):
-    ROS2_AVAILABLE = False
-    print("⚠️ ROS2/vicon_receiver not found. Vicon visualization will use dummy data.", file=sys.stderr)
-
 
 # PySide6 imports for the UI
 from PySide6.QtWidgets import (
@@ -79,11 +69,13 @@ try:
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import (
         LowState_, HandState_, BmsState_, LowCmd_, HandCmd_
     )
+    from unitree_sdk2py.idl.geometry_msgs.msg.dds_ import PoseStamped_, TwistStamped_
     # Project-specific imports
     from sdk_controller.robots.G1 import (
         MUJOCO_JOINT_NAMES, BODY_MUJOCO_TO_DDS, NUM_ACTIVE_BODY_JOINTS,
         LEFT_HAND_MUJOCO_TO_DDS, RIGHT_HAND_MUJOCO_TO_DDS
     )
+    from sdk_controller.topics import TOPIC_VICON_POSE, TOPIC_VICON_TWIST
 except ImportError as e:
     print(f"❌ Module import failed: {e}", file=sys.stderr)
     print("   Please ensure ATARI_NMPC root directory is added to your PYTHONPATH.", file=sys.stderr)
@@ -96,76 +88,6 @@ NUM_HAND_DDS_MOTORS = 7
 
 # --- Vicon Subscriber (adapted from zmq_dds_bridge.py) ---
 
-if ROS2_AVAILABLE:
-    class ViconSubscriber(Node):
-        """通过ROS2订阅Vicon数据，并计算速度"""
-        def __init__(self):
-            super().__init__('g1_visualizer_vicon_seubscriber')
-            self.lock = Lock()
-            
-            self.p = np.zeros(3)
-            self.q = np.array([1.,0.,0.,0.]) # (w, x, y, z)
-            self.v = np.zeros(3)
-            self.w = np.zeros(3)
-            
-            self.last_update_time = 0
-            self.is_active = False
-
-            qos_profile = QoSProfile(
-                reliability=ReliabilityPolicy.BEST_EFFORT,
-                history=HistoryPolicy.KEEP_LAST,
-                depth=1
-            )
-            self.subscription = self.create_subscription(
-                Position,
-                '/vicon/G1/G1',
-                self.listener_callback,
-                qos_profile)
-            print("✅ Vicon ROS2 订阅器创建成功，话题: /vicon/G1/G1")
-
-        def listener_callback(self, msg: Position):
-            """处理传入的Vicon消息"""
-            with self.lock:
-                current_time = time.time()
-                self.p = np.array([msg.x_trans, msg.y_trans, msg.z_trans]) / 1000.0
-                self.p[2] += VICON_Z_OFFSET # 应用Z轴偏移
-                self.q = np.array([msg.w, msg.x_rot, msg.y_rot, msg.z_rot])
-                
-                self.is_active = True
-                self.last_update_time = current_time
-
-        def get_state(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
-            """获取最新的位姿和速度"""
-            with self.lock:
-                if time.time() - self.last_update_time > 0.5:
-                    self.is_active = False
-                    return None, None, None, None
-                
-                # For visualization, we only need position and orientation
-                return self.p.copy(), self.q.copy(), self.v.copy(), self.w.copy()
-        
-        def start(self):
-            """在后台线程中启动ROS2节点"""
-            from threading import Thread
-            self.thread = Thread(target=self.run_node, daemon=True)
-            self.thread.start()
-
-        def run_node(self):
-            """运行rclpy.spin()"""
-            print("Vicon subscriber thread started.")
-            try:
-                # rclpy.init() has been called outside
-                rclpy.spin(self)
-            except Exception as e:
-                print(f"RCLPY spin failed: {e}")
-
-else: # Dummy ViconSubscriber if ROS2 is not available
-    class ViconSubscriber:
-        def __init__(self): pass
-        def start(self): pass
-        def get_state(self) -> Tuple[None, None, None, None]:
-            return None, None, None, None
-        def destroy_node(self): pass
 
 # --- MuJoCo Visualization Thread ---
 
@@ -177,7 +99,6 @@ class MujocoVisualizer(QThread):
         self.mj_model = None
         self.mj_data = None
         self.viewer = None
-        self.vicon_subscriber = None
         
         self.state_data = None
         self.last_state_time = 0
@@ -193,13 +114,6 @@ class MujocoVisualizer(QThread):
 
     def run(self):
         self.running = True
-
-        if ROS2_AVAILABLE:
-            rclpy.init()
-            self.vicon_subscriber = ViconSubscriber()
-            self.vicon_subscriber.start()
-        else:
-            self.vicon_subscriber = ViconSubscriber()
 
         try:
             # Load model directly from path, assuming vicon_frame is now in scene.xml
@@ -230,20 +144,7 @@ class MujocoVisualizer(QThread):
         while self.running and self.viewer and self.viewer.is_running():
             loop_start_time = time.time()
             
-            # --- Vicon Data ---
-            p, q, _, _ = self.vicon_subscriber.get_state()
-            if p is None or q is None:
-                # This will be true if ROS is unavailable or if data stream stops
-                print(" Vicon data not available. Halting visualization update. ", end='\r', flush=True)
-                time.sleep(0.1) # Prevent busy-waiting
-                continue
-            
-            # Set the free joint pose from Vicon data
-            qpos_addr = self.mj_model.joint('floating_base_joint').qposadr[0]
-            self.mj_data.qpos[qpos_addr:qpos_addr+3] = p
-            self.mj_data.qpos[qpos_addr+3:qpos_addr+7] = q
-
-            # --- Robot DDS State Data ---
+            # --- Robot State Data ---
             with self.state_lock:
                 local_state_data = self.state_data
                 state_age = time.time() - self.last_state_time
@@ -253,6 +154,23 @@ class MujocoVisualizer(QThread):
                 time.sleep(0.1) # Prevent busy-waiting
                 continue
 
+            # --- Vicon Data ---
+            vicon_data = local_state_data.get('vicon', {})
+            p = vicon_data.get('p')
+            q = vicon_data.get('q')
+
+            if p is None or q is None or not vicon_data.get('is_active', False):
+                # This will be true if DDS vicon data stream stops
+                print(" Vicon DDS data not available. Halting visualization update. ", end='\r', flush=True)
+                time.sleep(0.1) # Prevent busy-waiting
+                continue
+            
+            # Set the free joint pose from Vicon data
+            qpos_addr = self.mj_model.joint('floating_base_joint').qposadr[0]
+            self.mj_data.qpos[qpos_addr:qpos_addr+3] = p
+            self.mj_data.qpos[qpos_addr+3:qpos_addr+7] = q
+
+            # --- Robot DDS Joint State Data ---
             # --- Update MuJoCo Joint Positions ---
             all_joint_states = {**local_state_data.get('body', {}), 
                                 **local_state_data.get('left_hand', {}), 
@@ -273,9 +191,6 @@ class MujocoVisualizer(QThread):
 
         if self.viewer:
             self.viewer.close()
-        if ROS2_AVAILABLE and rclpy.ok():
-            self.vicon_subscriber.destroy_node()
-            rclpy.shutdown()
         print("⏹️ 3D Visualizer stopped.")
         self.finished.emit()
 
@@ -302,6 +217,10 @@ class DDSReceiver(QObject):
         self.right_hand_state_sub_lf = None
         self.right_hand_state_sub_hf = None
 
+        # Vicon subscribers
+        self.vicon_pose_sub = None
+        self.vicon_twist_sub = None
+
         # Hand command subscribers
         self.low_cmd_sub = None
         self.left_hand_cmd_sub_lf = None
@@ -313,6 +232,9 @@ class DDSReceiver(QObject):
         self.last_left_hand_state = None
         self.last_right_hand_state = None
         self.last_bms_state = None
+        self.last_vicon_pose = None
+        self.last_vicon_twist = None
+        self.vicon_last_update_time = 0
         self.is_connected = False
         
         # Store the latest full state
@@ -343,6 +265,12 @@ class DDSReceiver(QObject):
             self.right_hand_state_sub_lf.Init(self._right_hand_state_handler, 10)
             self.right_hand_state_sub_hf.Init(self._right_hand_state_handler, 10)
 
+            # Vicon Subscribers
+            self.vicon_pose_sub = ChannelSubscriber(TOPIC_VICON_POSE, PoseStamped_)
+            self.vicon_twist_sub = ChannelSubscriber(TOPIC_VICON_TWIST, TwistStamped_)
+            self.vicon_pose_sub.Init(self._vicon_pose_handler, 10)
+            self.vicon_twist_sub.Init(self._vicon_twist_handler, 10)
+
             # Command Subscribers
             self.low_cmd_sub = ChannelSubscriber("rt/lowcmd", LowCmd_)
             self.low_cmd_sub.Init(self._low_cmd_handler, 10)
@@ -369,6 +297,16 @@ class DDSReceiver(QObject):
             self.is_connected = True
             self.connectionStatusChanged.emit(True)
         self._process_state()
+
+    def _vicon_pose_handler(self, msg: PoseStamped_):
+        self.last_vicon_pose = msg
+        self.vicon_last_update_time = time.time()
+        self._process_state()
+
+    def _vicon_twist_handler(self, msg: TwistStamped_):
+        self.last_vicon_twist = msg
+        # Twist data is secondary, no need to trigger a full state update from here
+        # It will be picked up when pose or low_state triggers an update
 
     def _left_hand_state_handler(self, msg: HandState_):
         self.last_left_hand_state = msg
@@ -432,8 +370,25 @@ class DDSReceiver(QObject):
         if not self.running:
             return
         
-        state_data = {'body': {}, 'left_hand': {}, 'right_hand': {}, 'imu': {}, 'bms': {}}
+        state_data = {'body': {}, 'left_hand': {}, 'right_hand': {}, 'imu': {}, 'bms': {}, 'vicon': {}}
         
+        # Process Vicon data
+        vicon_is_active = (time.time() - self.vicon_last_update_time) < 0.5
+        state_data['vicon']['is_active'] = vicon_is_active
+        if vicon_is_active and self.last_vicon_pose:
+            pose = self.last_vicon_pose.pose
+            p = np.array([pose.position.x, pose.position.y, pose.position.z])
+            q = np.array([pose.orientation.w, pose.orientation.x, pose.orientation.y, pose.orientation.z])
+            state_data['vicon']['p'] = p
+            state_data['vicon']['q'] = q
+        
+        if vicon_is_active and self.last_vicon_twist:
+            twist = self.last_vicon_twist.twist
+            v = np.array([twist.linear.x, twist.linear.y, twist.linear.z])
+            w = np.array([twist.angular.x, twist.angular.y, twist.angular.z])
+            state_data['vicon']['v'] = v
+            state_data['vicon']['w'] = w
+
         # Process body state and IMU
         if self.last_low_state:
             for mj_idx, dds_idx in BODY_MUJOCO_TO_DDS.items():
@@ -756,6 +711,8 @@ class G1VisualizerUI(QMainWindow):
         self.show_3d_button.setText("Show 3D Visualization")
         self.show_3d_button.setEnabled(True)
         self.hide_ui_checkbox.setEnabled(True)
+        if self.mujoco_visualizer:
+            self.dds_receiver.newStateReceived.disconnect(self.mujoco_visualizer.update_robot_state)
         self.mujoco_visualizer = None
 
     @Slot(bool)

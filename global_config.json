@@ -8,6 +8,7 @@
   "Safety_Mode": "default_mode",
   "torque_limit_scale": 0.8,
   "vicon_z_offset": -0.23,
+  "vicon_velocity_filter_alpha": 0.4,
   "safety_ignored_joints": [
     "left_hand_thumb_0_joint", "left_hand_thumb_1_joint", "left_hand_thumb_2_joint",
     "left_hand_middle_0_joint", "left_hand_middle_1_joint",
