@@ -29,6 +29,6 @@ simple joint test update  [DONE]
 update simple_g1_joint_test.py using latest framework  [DONE]
 
 
-code distill and general check
+code distill and general check [DONE]
 
-experiment
+experiment 

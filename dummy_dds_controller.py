@@ -1,76 +1,99 @@
 #!/usr/bin/env python3
 """
-Dummy DDS 控制器
-=====================
-该脚本用于直接通过DDS向G1机器人发送一个固定的控制指令，
-使其保持在一个微屈膝的站立姿态。
+Dummy DDS Controller
+====================
+This script sends a fixed control command directly to the G1 robot via DDS,
+making it hold a slight knee-bent standing posture.
 
-它不依赖于ZMQ或任何外部策略，主要用于测试DDS通信链路和机器人对PD指令的响应。
+It does not depend on ZMQ or any external policies and is mainly used for testing
+the DDS communication link and the robot's response to PD commands.
 
-使用方式:
-1. 本地回环测试 (lo模式):
+Usage:
+1. Local loopback test (lo mode):
    python dummy_dds_controller.py --channel lo
-2. 控制真实机器人 (需要Vicon):
+2. Control a real robot (Vicon required):
    python dummy_dds_controller.py --channel <network_interface>
 
-启动Vicon的命令:
+Command to launch Vicon:
 ros2 launch vicon_receiver client.launch.py
 """
 import argparse
 import time
-import struct
-from typing import Dict, Any, Optional, Tuple
-from threading import Thread, Event, Lock
+from typing import Dict, Any, Optional
+from threading import Event
 import signal
 import sys
 import numpy as np
 import json
 
-# --- 全局配置加载 ---
+# --- Color Printing Utility ---
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def print_colored(tag, message):
+    tag_map = {
+        "ERROR": bcolors.FAIL,
+        "WARNING": bcolors.WARNING,
+        "SUCCEED": bcolors.OKGREEN,
+        "INFO": bcolors.OKBLUE,
+    }
+    color = tag_map.get(tag, bcolors.ENDC)
+    print(f"{color}[{tag}]{bcolors.ENDC} {message}")
+
+
+# --- Global Configuration Loading ---
 try:
     with open("global_config.json", "r") as f:
         GLOBAL_CONFIG = json.load(f)
     VICON_Z_OFFSET = GLOBAL_CONFIG.get("vicon_z_offset", 0.0)
-    print(f"✅ 从 global_config.json 加载配置, VICON_Z_OFFSET={VICON_Z_OFFSET}")
+    print_colored("SUCCEED", f"Configuration loaded from global_config.json, VICON_Z_OFFSET={VICON_Z_OFFSET}")
 except FileNotFoundError:
-    print("⚠️ global_config.json 未找到, 使用默认值。")
+    print_colored("WARNING", "global_config.json not found, using default values.")
     VICON_Z_OFFSET = 0.0
 except json.JSONDecodeError:
-    print("❌ global_config.json 解析失败, 使用默认值。")
+    print_colored("ERROR", "Failed to parse global_config.json, using default values.")
     VICON_Z_OFFSET = 0.0
 
 
-# 真实机器人相关导入
+# Real robot related imports
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from sdk_controller.robots.G1 import *
 from sdk_controller.abstract_biped import HGSDKController
 from typing import Dict, Any
 
-# Vicon/ROS2相关导入 - 已被移除，使用DDS Vicon订阅
+# Vicon/ROS2 related imports - removed, using DDS Vicon subscription
 
 
 class CEMSDKController(HGSDKController):
-    """CEM控制器 - 通过ZMQ接收外部策略的PD目标，专用于G1机器人"""
+    """CEM Controller - Receives PD targets from an external policy via ZMQ, specialized for the G1 robot"""
     
     def __init__(self, simulate: bool = False, robot_config=None, xml_path: str = "", vicon_required: bool = True, lo_mode: bool = False, kp_scale_factor: float = 1.0, safety_profile: str = "default"):
         """
-        初始化CEM控制器
+        Initializes the CEM controller.
         
         Args:
-            simulate: 是否仿真模式
-            robot_config: 机器人配置
-            xml_path: URDF/XML路径
-            vicon_required: 是否需要Vicon定位
-            lo_mode: 是否lo模式
-            kp_scale_factor: Kp增益缩放因子
-            safety_profile: 安全配置文件名称
+            simulate: Whether to run in simulation mode.
+            robot_config: Robot configuration.
+            xml_path: Path to the URDF/XML file.
+            vicon_required: Whether Vicon positioning is required.
+            lo_mode: Whether to run in loopback mode.
+            kp_scale_factor: Kp gain scaling factor.
+            safety_profile: Name of the safety profile configuration.
         """
-        print(f"🤖 初始化CEMSDKController (DDS Vicon模式)")
-        print(f"   仿真模式: {simulate}")
-        print(f"   需要Vicon: {vicon_required}")
-        print(f"   lo模式: {lo_mode}")
+        print_colored("INFO", "Initializing CEMSDKController (DDS Vicon mode)")
+        print(f"   Simulation mode: {simulate}")
+        print(f"   Vicon required: {vicon_required}")
+        print(f"   Loopback mode: {lo_mode}")
         
-        # 初始化HGSDKController
+        # Initialize HGSDKController
         super().__init__(
             simulate=simulate,
             robot_config=robot_config,
@@ -81,51 +104,56 @@ class CEMSDKController(HGSDKController):
             safety_profile=safety_profile
         )
         
-        # CEM控制相关状态
+        # CEM control related states
         self.current_pd_targets = None
         self.waiting_for_targets = True
         self.safety_emergency_stop = False
         
-        # Vicon状态缓存 - 父类HGSDKController会自动处理DDS订阅，此处无需操作
+        # Vicon state cache - The parent class HGSDKController handles DDS subscription automatically.
         if vicon_required:
-            print("   DDS Vicon 订阅器已由父类自动初始化。")
+            print("   DDS Vicon subscriber has been automatically initialized by the parent class.")
         
-        print("🎯 CEMSDKController初始化完成")
+        print_colored("SUCCEED", "CEMSDKController initialization complete.")
         
     def update_motor_cmd(self, time: float):
-        """实现抽象方法 - CEMSDKController主要通过外部PD目标控制"""
-        # 当使用外部PD目标时，这个方法通常不会被调用
-        # 保留为占位符或紧急情况处理
+        """Implements the abstract method - CEMSDKController is mainly controlled by external PD targets."""
+        # This method is usually not called when using external PD targets.
+        # It is kept as a placeholder or for emergency handling.
         if self.safety_emergency_stop:
-            print("🛑 安全紧急停止：切换到阻尼模式")
+            print_colored("WARNING", "Safety emergency stop: Switching to damping mode.")
             self.damping_motor_cmd()
         else:
-            # 如果没有外部目标，使用默认站立姿态
+            # If there are no external targets, use the default standing posture.
             if self.current_pd_targets is None:
-                print("⚠️ 无外部PD目标，使用默认站立姿态")
+                print_colored("WARNING", "No external PD targets, using default standing posture.")
                 self.update_motor_cmd_from_pd_targets(STAND_UP_JOINT_POS)
     
-    def get_robot_state(self) -> Dict[str, Any]:
-        """获取G1机器人状态 - 兼容ZMQ桥接格式"""
+    def get_robot_state(self) -> Optional[Dict[str, Any]]:
+        """
+        Gets the G1 robot state - compatible with ZMQ bridge format.
+        
+        Returns:
+            A dictionary with robot state or None if data is invalid.
+        """
         if self.lo_mode:
-            # lo模式：返回dummy状态（固定站立姿态）
+            # Loopback mode: return a dummy state (fixed standing posture).
             return self._get_dummy_state_for_cem()
 
-        # 更新DDS的关节状态
+        # Update joint states from DDS
         self.update_q_v_from_lowstate()
         self.update_hand_q_v_from_handstate()
         
-        # 初始化mocap值为默认值
+        # Initialize mocap values to default
         mocap_pos_to_send = np.zeros(3)
         mocap_quat_to_send = np.array([1, 0, 0, 0])
 
-        # 从Vicon更新基座状态 (通过DDS)
+        # Update base state from Vicon (via DDS)
         if self.vicon_required:
             p, q, v, w = None, None, None, None
             
-            # 检查Vicon DDS消息是否超时
+            # Check for Vicon DDS message timeout
             current_time = time.time()
-            vicon_timeout = 0.5 # 秒
+            vicon_timeout = 0.5 # seconds
 
             if self.last_vicon_pose is not None:
                 pose_timestamp = self.last_vicon_pose.header.stamp.sec + self.last_vicon_pose.header.stamp.nanosec * 1e-9
@@ -156,27 +184,27 @@ class CEMSDKController(HGSDKController):
                         self.last_vicon_twist.twist.angular.z,
                     ])
             
-            # 如果Vicon数据有效，则更新基座状态
+            # If Vicon data is valid, update base state
             if p is not None and q is not None and v is not None and w is not None:
                 self._q[0:3] = p
                 self._q[3:7] = q  # (w, x, y, z)
                 self._v[0:3] = v
                 self._v[3:6] = w
-                # 同样用vicon数据填充mocap字段，以对齐sim
+                # Also populate mocap fields with Vicon data to align with simulation
                 mocap_pos_to_send = p.copy()
                 mocap_quat_to_send = q.copy()
             else:
-                # Vicon数据无效或超时
-                print("❌ get_robot_state: 无效的Vicon数据 (DDS超时或未接收)，返回None", flush=True)
+                # Vicon data is invalid or timed out
+                print_colored("ERROR", "get_robot_state: Invalid Vicon data (DDS timeout or not received), returning None.")
                 return None
         
-        # 检查DDS数据是否有效（一个简单的完整性检查）
-        # 7: 之后是关节qpos。如果它们都是零，很可能意味着没有收到DDS数据。
+        # Check if DDS data is valid (a simple integrity check)
+        # 7: onwards are joint qpos. If they are all zero, it likely means no DDS data was received.
         if np.all(self._q[7:] == 0):
-            print("❌ get_robot_state: 关节数据全为零，可能未收到DDS数据。返回None。", flush=True)
+            print_colored("ERROR", "get_robot_state: Joint data is all zero, possibly no DDS data received. Returning None.")
             return None
 
-        # 返回ZMQ兼容格式
+        # Return in ZMQ compatible format
         return {
             'qpos': self._q.copy(),
             'qvel': self._v.copy(),
@@ -186,7 +214,7 @@ class CEMSDKController(HGSDKController):
         }
 
     def _get_dummy_state_for_cem(self) -> Dict[str, Any]:
-        """为lo模式生成dummy状态"""
+        """Generates a dummy state for loopback mode."""
         dummy_qpos = np.zeros(48)
         dummy_qvel = np.zeros(47)
         dummy_qpos[2] = 0.75  # z
@@ -198,16 +226,16 @@ class CEMSDKController(HGSDKController):
         }
     
     def send_motor_command(self, time: float, pd_targets: Optional[np.ndarray] = None):
-        """带安全检查的电机控制命令发送"""
+        """Sends motor control commands with safety checks."""
         if pd_targets is not None:
             self.current_pd_targets = pd_targets.copy()
         
-        # 调用父类方法
+        # Call parent class method
         super().send_motor_command(time, pd_targets)
 
 
 class DummyController:
-    """一个简单的DDS控制器，用于发送固定的站立指令"""
+    """A simple DDS controller to send a fixed standing command."""
     def __init__(
         self,
         channel: str = "lo",
@@ -223,33 +251,33 @@ class DummyController:
         
         self.running = Event()
         
-        print(f"🚀 初始化 Dummy DDS 控制器")
-        print(f"   模式: 真实机器人/lo模式 (通道: {channel})")
-        print(f"   控制频率: {control_frequency} Hz")
+        print_colored("INFO", "Initializing Dummy DDS Controller")
+        print(f"   Mode: Real robot/lo mode (Channel: {channel})")
+        print(f"   Control Frequency: {control_frequency} Hz")
 
-        # 1. 初始化DDS
+        # 1. Initialize DDS
         self._setup_dds()
 
-        # 2. 初始化CEM控制器后端
+        # 2. Initialize CEM controller backend
         self.cem_controller = self._setup_cem_controller()
             
-        # 3. 定义目标姿态
+        # 3. Define target posture
         self.target_pos = self._define_target_pose()
         
-        print("✅ Dummy控制器初始化完成")
+        print_colored("SUCCEED", "Dummy controller initialization complete.")
 
     def _setup_dds(self):
-        """设置DDS通信"""
+        """Sets up DDS communication."""
         if self.channel == "lo":
-            print("   使用lo接口 (domain_id=1)")
+            print("   Using lo interface (domain_id=1)")
             ChannelFactoryInitialize(1, "lo")
         else:
-            print(f"   使用真实网络接口: {self.channel} (domain_id=0)")
+            print(f"   Using real network interface: {self.channel} (domain_id=0)")
             ChannelFactoryInitialize(0, self.channel)
 
-    def _setup_cem_controller(self):
-        """设置并返回一个CEM控制器实例"""
-        print(f"🤖 设置 CEM 控制模式 (通道: {self.channel})...")
+    def _setup_cem_controller(self) -> CEMSDKController:
+        """Sets up and returns a CEM controller instance."""
+        print_colored("INFO", f"Setting up CEM control mode (Channel: {self.channel})...")
         controller = CEMSDKController(
             simulate=False,
             robot_config=None,
@@ -259,58 +287,58 @@ class DummyController:
             kp_scale_factor=self.kp_scale_factor,
             safety_profile=self.safety_profile
         )
-        print("✅ CEM控制器设置完成")
+        print_colored("SUCCEED", "CEM controller setup complete.")
         return controller
     
     def _define_target_pose(self) -> np.ndarray:
-        """定义并返回目标关节位置"""
-        # 创建一个包含27个主动身体关节的目标数组
+        """Defines and returns the target joint positions."""
+        # Create a target array for 27 active body joints
         target_q = np.zeros(NUM_ACTIVE_BODY_JOINTS)
         
-        # 根据G1.py中的mujoco_index设置膝关节微屈
+        # Set a slight knee bend based on mujoco_index in G1.py
         # left_knee_joint (mujoco_index: 3)
         # right_knee_joint (mujoco_index: 9)
-        target_q[3] = 0.1  # 左膝
-        target_q[9] = 0.1  # 右膝
+        target_q[3] = 0.1  # Left knee
+        target_q[9] = 0.1  # Right knee
 
-        print(f"🎯 目标姿态已设定 (双膝微屈0.1 rad)")
+        print_colored("INFO", "Target posture set (slight knee bend at 0.1 rad).")
         return target_q
 
     def run(self):
-        """运行主控制循环"""
-        print(f"🎬 启动Dummy控制器主循环")
+        """Runs the main control loop."""
+        print_colored("INFO", "Starting Dummy Controller main loop.")
         self.running.set()
         
-        # 在启动前，等待有效的机器人状态，确保DDS和Vicon已连接
-        print("🔄 等待有效的初始机器人状态...")
+        # Before starting, wait for a valid robot state to ensure DDS and Vicon are connected
+        print("   Waiting for a valid initial robot state...")
         initial_state = None
         while initial_state is None and self.running.is_set():
             initial_state = self.cem_controller.get_robot_state()
             if initial_state is None:
                 if not self.running.is_set(): break
-                print("  ...仍在等待, 0.5s后重试...")
+                print("  ...still waiting, retrying in 0.5s...")
                 time.sleep(0.5)
 
         if not self.running.is_set():
             self.stop()
             return
             
-        print("✅ 成功获取初始状态，开始发送控制指令...")
+        print_colored("SUCCEED", "Successfully received initial state, starting to send control commands...")
 
         try:
             while self.running.is_set():
-                # 检查机器人状态是否有效
+                # Check if the robot state is valid
                 state = self.cem_controller.get_robot_state()
                 if state is None:
-                    print("❌ 失去机器人状态(Vicon或DDS超时)。为安全起见，正在停止。")
-                    print("   发送阻尼命令...")
+                    print_colored("ERROR", "Lost robot state (Vicon or DDS timeout). Stopping for safety.")
+                    print("   Sending damping commands...")
                     for _ in range(5):
                         self.cem_controller.damping_motor_cmd()
                         time.sleep(0.01)
                     self.stop()
                     break
 
-                # 以固定频率发送目标姿态指令
+                # Send the target posture command at a fixed frequency
                 self.cem_controller.send_motor_command(
                     time=time.time(), 
                     pd_targets=self.target_pos
@@ -319,56 +347,58 @@ class DummyController:
                 time.sleep(self.control_dt)
 
         except KeyboardInterrupt:
-            print("\n🛑 收到中断信号...")
+            print("\n")
+            print_colored("WARNING", "Interrupt signal received...")
         
         finally:
-            print("   发送最终阻尼命令...")
+            print("   Sending final damping commands...")
             for _ in range(5):
                 self.cem_controller.damping_motor_cmd()
                 time.sleep(0.01)
             self.stop()
 
     def stop(self):
-        """停止控制器"""
-        print("🛑 停止 Dummy 控制器...")
+        """Stops the controller."""
+        print_colored("INFO", "Stopping Dummy Controller...")
         self.running.clear()
-        # cem_controller会在父进程退出时自动清理DDS资源
-        print("✅ Dummy控制器已停止")
+        # The cem_controller will automatically clean up DDS resources when the parent process exits
+        print_colored("SUCCEED", "Dummy Controller stopped.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Dummy DDS G1 控制器")
+    parser = argparse.ArgumentParser(description="Dummy DDS G1 Controller")
     parser.add_argument(
         "--channel",
         type=str,
         default="lo",
-        help="DDS通道：'lo'表示本地回环，其他值为网络接口名"
+        help="DDS channel: 'lo' for local loopback, or a network interface name."
     )
     parser.add_argument(
         "--frequency",
         type=float,
         default=100.0,
-        help="控制频率 (Hz)"
+        help="Control frequency (Hz)."
     )
     parser.add_argument(
         "--kp_scale",
         type=float,
         default=1.0,
-        help="全局Kp增益缩放因子 (0.0-1.0)"
+        help="Global Kp gain scaling factor (0.0-1.0)."
     )
     parser.add_argument(
         "--safety_profile",
         type=str,
         default="default",
         choices=["default", "conservative"],
-        help="选择安全层配置文件 ('default' 或 'conservative')"
+        help="Select the safety layer profile ('default' or 'conservative')."
     )
     
     args = parser.parse_args()
     
     controller = None
     def signal_handler(sig, frame):
-        print("\n🛑 收到停止信号")
+        print("\n")
+        print_colored("WARNING", "Stop signal received.")
         if controller:
             controller.stop()
         sys.exit(0)

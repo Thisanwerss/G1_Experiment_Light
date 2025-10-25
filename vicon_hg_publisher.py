@@ -12,19 +12,41 @@ from unitree_sdk2py.idl.std_msgs.msg.dds_ import Header_
 
 from unitree_sdk2py.utils.thread import RecurrentThread
 
-# --- 全局配置加载 ---
+# --- Color Printing Utility ---
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def print_colored(tag, message):
+    tag_map = {
+        "ERROR": bcolors.FAIL,
+        "WARNING": bcolors.WARNING,
+        "SUCCEED": bcolors.OKGREEN,
+        "INFO": bcolors.OKBLUE,
+    }
+    color = tag_map.get(tag, bcolors.ENDC)
+    print(f"{color}[{tag}]{bcolors.ENDC} {message}")
+
+# --- Global Configuration Loading ---
 try:
     with open("global_config.json", "r") as f:
         GLOBAL_CONFIG = json.load(f)
     VICON_Z_OFFSET = GLOBAL_CONFIG.get("vicon_z_offset", 0.0)
     VICON_VELOCITY_FILTER_ALPHA = GLOBAL_CONFIG.get("vicon_velocity_filter_alpha", 0.4)
-    print(f"✅ 从 global_config.json 加载配置, VICON_Z_OFFSET={VICON_Z_OFFSET}, VICON_VELOCITY_FILTER_ALPHA={VICON_VELOCITY_FILTER_ALPHA}")
+    print_colored("SUCCEED", f"Loaded configuration from global_config.json, VICON_Z_OFFSET={VICON_Z_OFFSET}, VICON_VELOCITY_FILTER_ALPHA={VICON_VELOCITY_FILTER_ALPHA}")
 except FileNotFoundError:
-    print("⚠️ global_config.json 未找到, 使用默认值。")
+    print_colored("WARNING", "global_config.json not found, using default values.")
     VICON_Z_OFFSET = 0.0
     VICON_VELOCITY_FILTER_ALPHA = 0.4
 except json.JSONDecodeError:
-    print("❌ global_config.json 解析失败, 使用默认值。")
+    print_colored("ERROR", "Failed to parse global_config.json, using default values.")
     VICON_Z_OFFSET = 0.0
     VICON_VELOCITY_FILTER_ALPHA = 0.4
 
@@ -94,7 +116,7 @@ class ViconPosePublisherHG:
         
         while t < timout:
             if self.frame_number > 0:
-                print("Vicon Pose Publisher (HG) started")
+                print_colored("SUCCEED", "Vicon Pose Publisher (HG) started")
                 return
             time.sleep(sleep)
             t += sleep
@@ -103,15 +125,15 @@ class ViconPosePublisherHG:
         
     def connect(self, ip=None):
         if ip is not None: # set
-            print(f"Changing IP of Vicon Host to: {ip}")
+            print_colored("INFO", f"Changing IP of Vicon Host to: {ip}")
             self.vicon_ip = ip
         
         ret = self.vicon_client.connect(self.vicon_ip)
         if ret != pv.Result.Success:
-            print(f"Connection to {self.vicon_ip} failed")
+            print_colored("ERROR", f"Connection to {self.vicon_ip} failed")
             self.is_connected = False
         else:
-            print(f"Connection to {self.vicon_ip} successful")
+            print_colored("SUCCEED", f"Connection to {self.vicon_ip} successful")
             self.is_connected = True
         return self.is_connected
     
@@ -129,14 +151,14 @@ class ViconPosePublisherHG:
         
     def _update_linear_velocity(self):
         # global linear velocity
-        # 使用二阶后向差分以提高稳定性
+        # Use a second-order backward difference for improved stability
         avg_dt = (self.t - self.prev_prev_t) / 2.
         if avg_dt < 1e-6: return
         
         self.prev_v = self.v
         self.v = (3 * self.p - 4 * self.prev_p + self.prev_prev_p) / (2 * avg_dt)
 
-        # 应用一个轻量的指数平滑滤波器来减少抖动
+        # Apply a lightweight exponential smoothing filter to reduce jitter
         self.v = VICON_VELOCITY_FILTER_ALPHA * self.v + (1 - VICON_VELOCITY_FILTER_ALPHA) * self.prev_v
         
     def _update_p_q_t(self, new_p : np.ndarray, new_q : np.ndarray, new_t : float):
@@ -240,7 +262,7 @@ if __name__ == "__main__":
     else:
         ChannelFactoryInitialize(0, args.channel)
 
-    print(f"Publishing Vicon pose for '{args.object_name}' from {args.vicon_ip} at {args.freq}Hz on channel '{args.channel}'")
+    print_colored("INFO", f"Publishing Vicon pose for '{args.object_name}' from {args.vicon_ip} at {args.freq}Hz on channel '{args.channel}'")
 
     vicon_publisher = ViconPosePublisherHG(
         vicon_ip=args.vicon_ip,
@@ -252,4 +274,4 @@ if __name__ == "__main__":
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\nStopping Vicon Publisher.") 
+        print_colored("INFO", "\nStopping Vicon Publisher.") 

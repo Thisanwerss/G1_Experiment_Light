@@ -1,3 +1,0 @@
-# Include all model files in a pip install
-include *.xml
-recursive-include hydrax *

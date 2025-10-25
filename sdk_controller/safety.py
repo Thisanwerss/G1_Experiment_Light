@@ -5,6 +5,28 @@ import json
 import os
 from typing import Set
 
+# --- Color Printing Utility ---
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def print_colored(tag, message):
+    tag_map = {
+        "ERROR": bcolors.FAIL,
+        "WARNING": bcolors.WARNING,
+        "SUCCEED": bcolors.OKGREEN,
+        "INFO": bcolors.OKBLUE,
+    }
+    color = tag_map.get(tag, bcolors.ENDC)
+    print(f"{color}[{tag}]{bcolors.ENDC} {message}")
+
 def _load_safety_config():
     """Helper function to load the safety configuration."""
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "safety_config.json")
@@ -32,7 +54,7 @@ class SafetyLayer:
             raise ValueError(f"Safety profile '{safety_profile}' not found in safety_config.json")
         profile_config = _safety_config[safety_profile]
         
-        print(f"🛡️  Initializing Safety Layer with profile: '{safety_profile}'")
+        print_colored("INFO", f"Initializing Safety Layer with profile: '{safety_profile}'")
 
         self.inactive_joint_names = inactive_joint_names or set()
 
@@ -89,7 +111,7 @@ class SafetyLayer:
             # Add a bounds check for safety before accessing the array
             if joint_id >= len(joint_positions):
                 # This should not happen with the corrected indexing, but as a safeguard:
-                print(f"⚠️ [Safety Layer] Warning: Joint ID {joint_id} is out of bounds for joint_positions array (size {len(joint_positions)}). Skipping.")
+                print_colored("WARNING", f"[Safety Layer] Warning: Joint ID {joint_id} is out of bounds for joint_positions array (size {len(joint_positions)}). Skipping.")
                 continue
 
             if not (q_min < joint_positions[joint_id] < q_max):
@@ -105,7 +127,7 @@ class SafetyLayer:
                 except IndexError:
                     dof_name = f"Dof with original index {original_dof}"
 
-                print(f"❌❌❌ [安全层] 关节物理极限超限! 关节: {dof_name} | 位置: {joint_positions[joint_id]:.2f} (范围: {q_min:.2f} ~ {q_max:.2f}) ❌❌❌")
+                print_colored("ERROR", f"[Safety Layer] Joint physical limit exceeded! Joint: {dof_name} | Position: {joint_positions[joint_id]:.2f} (Range: {q_min:.2f} ~ {q_max:.2f})")
                 return False
         return True
 
@@ -117,7 +139,7 @@ class SafetyLayer:
         for act_id, max_torque in self.torque_limits.items():
             if abs(torques[act_id]) > max_torque:
                 act_name = self.mj_model.actuator(act_id).name
-                print(f"❌❌❌ [安全层] 预估力矩超限! 执行器: {act_name} | 力矩: {abs(torques[act_id]):.1f} > 上限: {max_torque:.1f} Nm ❌❌❌")
+                print_colored("ERROR", f"[Safety Layer] Estimated torque exceeds limit! Actuator: {act_name} | Torque: {abs(torques[act_id]):.1f} > Limit: {max_torque:.1f} Nm")
                 return False
         return True
     
@@ -131,7 +153,7 @@ class SafetyLayer:
         pitch = np.arcsin(2 * (x * z - y))
         
         if abs(roll) > self.base_orientation_limit or abs(pitch) > self.base_orientation_limit:
-            print(f"❌❌❌ [安全层] 机器人基座倾角过大! Roll: {roll*180/np.pi:.1f}°, Pitch: {pitch*180/np.pi:.1f}° (上限: {self.base_orientation_limit*180/np.pi:.1f}°) ❌❌❌")
+            print_colored("ERROR", f"[Safety Layer] Robot base tilt angle is too large! Roll: {roll*180/np.pi:.1f}°, Pitch: {pitch*180/np.pi:.1f}° (Limit: {self.base_orientation_limit*180/np.pi:.1f}°)")
             return False
         return True
 
@@ -140,6 +162,6 @@ class SafetyLayer:
         if not (self.check_joint_limits(joint_positions) and 
                 self.check_torque_limits(torques) and
                 self.check_base_orientation(base_quaternion)):
-            print("--- 触发安全保护! 切换至阻尼模式 ---")
+            print_colored("WARNING", "--- Safety triggered! Switching to damping mode ---")
             return False
         return True

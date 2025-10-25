@@ -1,9 +1,0 @@
-<mujoco model="box_1kg">
-  <worldbody>
-    <body name="box_1kg" pos="0.4 0 0.2">
-      <freejoint/>
-      <inertial pos="0 0 0" mass="1.0" diaginertia="0.02 0.02 0.02"/>
-      <geom type="box" size="0.15 0.15 0.2" rgba="0.8 0.5 0.2 1" contype="1" conaffinity="1"/>
-    </body>
-  </worldbody>
-</mujoco>

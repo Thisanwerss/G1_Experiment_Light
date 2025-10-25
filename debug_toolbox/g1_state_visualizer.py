@@ -30,17 +30,39 @@ from threading import Lock
 from typing import Optional, Tuple
 import json
 
-# --- 全局配置加载 ---
+# --- Color Printing Utility ---
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def print_colored(tag, message, **kwargs):
+    tag_map = {
+        "ERROR": bcolors.FAIL,
+        "WARNING": bcolors.WARNING,
+        "SUCCEED": bcolors.OKGREEN,
+        "INFO": bcolors.OKBLUE,
+    }
+    color = tag_map.get(tag, bcolors.ENDC)
+    print(f"{color}[{tag}]{bcolors.ENDC} {message}", **kwargs)
+
+# --- Global Configuration Loading ---
 try:
     with open("global_config.json", "r") as f:
         GLOBAL_CONFIG = json.load(f)
     VICON_Z_OFFSET = GLOBAL_CONFIG.get("vicon_z_offset", 0.0)
-    print(f"✅ 从 global_config.json 加载配置, VICON_Z_OFFSET={VICON_Z_OFFSET}")
+    print_colored("SUCCEED", f"Loaded configuration from global_config.json, VICON_Z_OFFSET={VICON_Z_OFFSET}")
 except FileNotFoundError:
-    print("⚠️ global_config.json 未找到, 使用默认值。")
+    print_colored("WARNING", "global_config.json not found, using default values.")
     VICON_Z_OFFSET = 0.0
 except json.JSONDecodeError:
-    print("❌ global_config.json 解析失败, 使用默认值。")
+    print_colored("ERROR", "Failed to parse global_config.json, using default values.")
     VICON_Z_OFFSET = 0.0
 
 # MuJoCo and Vicon/ROS2 imports
@@ -48,7 +70,7 @@ try:
     import mujoco
     import mujoco.viewer
 except ImportError as e:
-    print(f"⚠️ MuJoCo import failed: {e}. 3D visualization will be disabled.", file=sys.stderr)
+    print_colored("WARNING", f"MuJoCo import failed: {e}. 3D visualization will be disabled.", file=sys.stderr)
     mujoco = None
 
 
@@ -77,9 +99,9 @@ try:
     )
     from sdk_controller.topics import TOPIC_VICON_POSE, TOPIC_VICON_TWIST
 except ImportError as e:
-    print(f"❌ Module import failed: {e}", file=sys.stderr)
-    print("   Please ensure ATARI_NMPC root directory is added to your PYTHONPATH.", file=sys.stderr)
-    print("   Example: export PYTHONPATH=$PYTHONPATH:/path/to/ATARI_NMPC", file=sys.stderr)
+    print_colored("ERROR", f"Module import failed: {e}", file=sys.stderr)
+    print_colored("ERROR", "   Please ensure ATARI_NMPC root directory is added to your PYTHONPATH.", file=sys.stderr)
+    print_colored("ERROR", "   Example: export PYTHONPATH=$PYTHONPATH:/path/to/ATARI_NMPC", file=sys.stderr)
     sys.exit(1)
 
 # --- Constants ---
@@ -135,7 +157,7 @@ class MujocoVisualizer(QThread):
                     self.joint_name_to_qpos_addr[jnt_name] = qpos_addr
 
         except Exception as e:
-            print(f"❌ Failed to load MuJoCo model: {e}", file=sys.stderr)
+            print_colored("ERROR", f"Failed to load MuJoCo model: {e}", file=sys.stderr)
             self.running = False
 
         if self.running:
@@ -150,7 +172,7 @@ class MujocoVisualizer(QThread):
                 state_age = time.time() - self.last_state_time
             
             if not local_state_data or state_age > 0.5:
-                print(" DDS robot state not available. Halting visualization update. ", end='\r', flush=True)
+                print_colored("INFO", " DDS robot state not available. Halting visualization update. ", end='\r', flush=True)
                 time.sleep(0.1) # Prevent busy-waiting
                 continue
 
@@ -161,7 +183,7 @@ class MujocoVisualizer(QThread):
 
             if p is None or q is None or not vicon_data.get('is_active', False):
                 # This will be true if DDS vicon data stream stops
-                print(" Vicon DDS data not available. Halting visualization update. ", end='\r', flush=True)
+                print_colored("INFO", " Vicon DDS data not available. Halting visualization update. ", end='\r', flush=True)
                 time.sleep(0.1) # Prevent busy-waiting
                 continue
             
@@ -191,7 +213,7 @@ class MujocoVisualizer(QThread):
 
         if self.viewer:
             self.viewer.close()
-        print("⏹️ 3D Visualizer stopped.")
+        print_colored("INFO", "3D Visualizer stopped.")
         self.finished.emit()
 
     def stop(self):
@@ -244,7 +266,7 @@ class DDSReceiver(QObject):
 
     @Slot(str)
     def start(self, channel: str):
-        print(f"🚀 正在启动DDS监听器，通道: {channel}...")
+        print_colored("INFO", f"Starting DDS listener, channel: {channel}...")
         try:
             domain_id = 0 if channel != "lo" else 1
             ChannelFactoryInitialize(domain_id, channel)
@@ -286,9 +308,9 @@ class DDSReceiver(QObject):
             self.right_hand_cmd_sub_hf.Init(self._right_hand_cmd_handler, 10)
             
             self.running = True
-            print("✅ DDS监听器启动成功。")
+            print_colored("SUCCEED", "DDS listener started successfully.")
         except Exception as e:
-            print(f"❌ DDS初始化失败: {e}", file=sys.stderr)
+            print_colored("ERROR", f"DDS initialization failed: {e}", file=sys.stderr)
             self.connectionStatusChanged.emit(False)
 
     def _low_state_handler(self, msg: LowState_):
@@ -432,7 +454,7 @@ class DDSReceiver(QObject):
     @Slot()
     def stop(self):
         self.running = False
-        print("🛑 Stopping DDS listener...")
+        print_colored("INFO", "Stopping DDS listener...")
 
 # --- UI Components ---
 
@@ -688,7 +710,7 @@ class G1VisualizerUI(QMainWindow):
     @Slot()
     def toggle_3d_visualization(self):
         if not self.mujoco_visualizer and mujoco is not None:
-            print("🚀 Starting 3D visualization...")
+            print_colored("INFO", "Starting 3D visualization...")
             
             if self.hide_ui_checkbox.isChecked():
                 self.details_container.setVisible(False)
@@ -705,7 +727,7 @@ class G1VisualizerUI(QMainWindow):
     @Slot()
     def on_3d_viz_finished(self):
         """Called when the MuJoCo viewer window is closed."""
-        print("3D visualization window closed.")
+        print_colored("INFO", "3D visualization window closed.")
         self.details_container.setVisible(True)
         
         self.show_3d_button.setText("Show 3D Visualization")
@@ -718,11 +740,13 @@ class G1VisualizerUI(QMainWindow):
     @Slot(bool)
     def on_connection_status_changed(self, is_connected):
         if is_connected:
-            self.connection_status_label.setText("🟢 Connected")
+            self.connection_status_label.setText("Status: Connected")
+            self.connection_status_label.setStyleSheet("color: green")
             self.connect_button.setEnabled(False)
             self.channel_combo.setEnabled(False)
         else:
-            self.connection_status_label.setText("🔴 Disconnected")
+            self.connection_status_label.setText("Status: Disconnected")
+            self.connection_status_label.setStyleSheet("color: red")
             self.connect_button.setEnabled(True)
             self.channel_combo.setEnabled(True)
 
@@ -772,6 +796,15 @@ class G1VisualizerUI(QMainWindow):
         super().closeEvent(event)
 
 # --- Main Execution ---
+
+def load_default_interface_from_config():
+    """Loads the default network interface from the global configuration file."""
+    try:
+        with open("global_config.json", "r") as f:
+            config = json.load(f)
+        return config.get("default_network_interface", "lo")
+    except (FileNotFoundError, json.JSONDecodeError):
+        return "lo"
 
 def main():
     # Graceful shutdown on Ctrl+C

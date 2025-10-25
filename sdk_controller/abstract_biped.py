@@ -5,6 +5,30 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple
 import json
 import os
+import threading
+
+# --- Color Printing Utility ---
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def print_colored(tag, message):
+    tag_map = {
+        "ERROR": bcolors.FAIL,
+        "WARNING": bcolors.WARNING,
+        "SUCCEED": bcolors.OKGREEN,
+        "INFO": bcolors.OKBLUE,
+    }
+    color = tag_map.get(tag, bcolors.ENDC)
+    print(f"{color}[{tag}]{bcolors.ENDC} {message}")
+
 
 # HG series DDS message imports
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
@@ -68,7 +92,7 @@ class HGSafetyLayer(SafetyLayer):
         
         if safety_profile == "conservative":
             print("======================================================================")
-            print("🛡️  G1 Safety Layer running in [Conservative Mode] - thresholds tightened! 🛡️")
+            print_colored("WARNING", "G1 Safety Layer running in [Conservative Mode] - thresholds tightened!")
             print("======================================================================")
         
         self.max_position_error = profile_config["max_position_error_rad"]
@@ -98,7 +122,7 @@ class HGSafetyLayer(SafetyLayer):
             if mj_idx < NUM_ACTIVE_BODY_JOINTS:
                 self.torque_limits[dds_idx] = max_torque * total_scale_factor
         
-        print(f"✅ G1 Safety Layer: Set torque limits for {len(self.torque_limits)} joints (total scale: {total_scale_factor:.3f})")
+        print_colored("SUCCEED", f"G1 Safety Layer: Set torque limits for {len(self.torque_limits)} joints (total scale: {total_scale_factor:.3f})")
 
     def get_joint_limits_from_model(self) -> Dict[int, Tuple[float, float]]:
         """Helper to read raw joint limits from the MuJoCo model."""
@@ -142,7 +166,7 @@ class HGSafetyLayer(SafetyLayer):
 
             self.joint_limits[joint_id] = (scaled_min, scaled_max)
 
-        print(f"✅ G1 Safety Layer: Set scaled joint limits for {len(self.joint_limits)} joints (total scale: {total_scale_factor:.2f})")
+        print_colored("SUCCEED", f"G1 Safety Layer: Set scaled joint limits for {len(self.joint_limits)} joints (total scale: {total_scale_factor:.2f})")
     
     def check_safety(self, q_current: np.ndarray, q_target: np.ndarray, 
                     kp_gains: np.ndarray, base_quaternion: np.ndarray) -> bool:
@@ -199,7 +223,7 @@ class HGSafetyLayer(SafetyLayer):
                 error = abs(q_target[mj_idx] - q_current[mj_idx])
                 if error > self.max_position_error:
                     joint_name = MUJOCO_JOINT_NAMES[mj_idx] if mj_idx < len(MUJOCO_JOINT_NAMES) else f"MJ ID {mj_idx}"
-                    print(f"❌❌❌ [Safety Layer] Joint target position jump too large! Joint: {joint_name} | Error: {error:.3f} > Limit: {self.max_position_error:.3f} rad ❌❌❌")
+                    print_colored("ERROR", f"[Safety Layer] Joint target position jump too large! Joint: {joint_name} | Error: {error:.3f} > Limit: {self.max_position_error:.3f} rad")
                     return False
         return True
     
@@ -215,7 +239,7 @@ class HGSafetyLayer(SafetyLayer):
                 
                 if potential_torque > max_torque:
                     joint_name = MUJOCO_JOINT_NAMES[mj_idx] if mj_idx < len(MUJOCO_JOINT_NAMES) else f"MJ ID {mj_idx}"
-                    print(f"❌❌❌ [Safety Layer] Potential torque exceeds limit! Joint: {joint_name} | Estimated: {potential_torque:.1f} > Limit: {max_torque:.1f} Nm ❌❌❌")
+                    print_colored("ERROR", f"[Safety Layer] Potential torque exceeds limit! Joint: {joint_name} | Estimated: {potential_torque:.1f} > Limit: {max_torque:.1f} Nm")
                     return False
         return True
     
@@ -270,12 +294,12 @@ class HGSDKControllerBase(ABC):
         hand_state_sub.Init(self.hand_state_handler, 10)
         
         self.wait_subscriber(required=self.wait_for_subscribers)
-        print("🤖 HG Controller Ready!")
+        print_colored("INFO", "HG Controller Ready!")
         
     def wait_subscriber(self, required: bool = True) -> bool:
         """Wait for DDS subscribers to connect"""
         if not required:
-            print("⚠️ Lo mode: Skip DDS subscriber waiting")
+            print_colored("WARNING", "Lo mode: Skip DDS subscriber waiting")
             return True
             
         timeout = 15.0
@@ -287,7 +311,7 @@ class HGSDKControllerBase(ABC):
             t += sleep    
             time.sleep(sleep)
             
-        raise TimeoutError("❌ Did not receive G1 robot state message")
+        raise TimeoutError("Did not receive G1 robot state message")
             
     def low_state_handler(self, msg: LowState_):
         """Low-level state message handler"""
@@ -329,7 +353,7 @@ class HGSDKController(HGSDKControllerBase):
         self.vicon_required = vicon_required
         self.lo_mode = lo_mode
         self.kp_scale_factor = kp_scale_factor
-        print(f"✅ G1 Kp scale factor: {self.kp_scale_factor}")
+        print_colored("SUCCEED", f"G1 Kp scale factor: {self.kp_scale_factor}")
         
         # Load global configuration
         self.global_config = load_global_config()
@@ -338,7 +362,7 @@ class HGSDKController(HGSDKControllerBase):
         self.disabled_joint_names = set(self.global_config.get("disabled_joints", []))
         self.disabled_mj_indices = set()
         if self.disabled_joint_names:
-            print(f"🦾 Disabling control for joints: {list(self.disabled_joint_names)}")
+            print_colored("INFO", f"Disabling control for joints: {list(self.disabled_joint_names)}")
             # G1_JOINT_CONFIG is imported from G1.py
             for joint_name, config in G1_JOINT_CONFIG.items():
                 if joint_name in self.disabled_joint_names:
@@ -347,7 +371,7 @@ class HGSDKController(HGSDKControllerBase):
         
         # If Vicon is required but not provided, raise exception
         if self.vicon_required and not simulate:
-            print("Vicon is required. Setting up subscribers...")
+            print_colored("INFO", "Vicon is required. Setting up subscribers...")
             
         # Initialize robot model
         if not xml_path:
@@ -380,7 +404,7 @@ class HGSDKController(HGSDKControllerBase):
                 self.joint_dof2act_id[dof_idx] = dds_idx
                 self.joint_act_id2dof[dds_idx] = dof_idx
         
-        print(f"✅ G1 Joint Mapping: {len(self.joint_dof2act_id)} body joints")
+        print_colored("SUCCEED", f"G1 Joint Mapping: {len(self.joint_dof2act_id)} body joints")
         
         # Safety layer
         # Use configuration from current module, if no robot_config is passed
@@ -400,11 +424,11 @@ class HGSDKController(HGSDKControllerBase):
             vicon_twist_sub = ChannelSubscriber(TOPIC_VICON_TWIST, TwistStamped_)
             vicon_pose_sub.Init(self.vicon_pose_handler, 10)
             vicon_twist_sub.Init(self.vicon_twist_handler, 10)
-            print("✅ Vicon subscribers for Pose and Twist are set up.")
+            print_colored("SUCCEED", "Vicon subscribers for Pose and Twist are set up.")
         
         # In lo mode, don't wait for real DDS messages, but need to publish dummy state
         if self.lo_mode:
-            print("🎯 Lo mode: DDS communication initialized, but not waiting for real state messages")
+            print_colored("INFO", "Lo mode: DDS communication initialized, but not waiting for real state messages")
             self._setup_lo_mode_dummy_publisher()
 
     def update_q_v_from_lowstate(self):
@@ -454,7 +478,7 @@ class HGSDKController(HGSDKControllerBase):
                 self.damping_motor_cmd()
         
         # Safety check
-        # 当有外部PD目标时，总是执行安全检查
+        # Always perform safety check when external PD targets are present
         if pd_targets is not None:
             current_q = self._get_current_body_positions()
             target_q = pd_targets[:NUM_ACTIVE_BODY_JOINTS]
@@ -462,7 +486,7 @@ class HGSDKController(HGSDKControllerBase):
             
             safe = self.safety.check_safety(current_q, target_q, kp_gains, self._q[3:7])
             if not safe:
-                print("⚠️ G1 safety check failed, switching to damping mode")
+                print_colored("WARNING", "G1 safety check failed, switching to damping mode")
                 self.damping_motor_cmd()
                 self.controller_running = False
                 self.damping_running = True
@@ -488,7 +512,7 @@ class HGSDKController(HGSDKControllerBase):
     def update_motor_cmd_from_pd_targets(self, pd_targets: np.ndarray):
         """Update motor commands based on external PD targets"""
         if len(pd_targets) < NUM_ACTIVE_BODY_JOINTS:
-            print(f"⚠️ PD target length insufficient: {len(pd_targets)} < {NUM_ACTIVE_BODY_JOINTS}")
+            print_colored("WARNING", f"PD target length insufficient: {len(pd_targets)} < {NUM_ACTIVE_BODY_JOINTS}")
             return
             
         # Body joint PD control
@@ -585,7 +609,6 @@ class HGSDKController(HGSDKControllerBase):
     
     def _setup_lo_mode_dummy_publisher(self):
         """Setup dummy state publisher for lo mode"""
-        import threading
         
         # Create dummy LowState message
         self.dummy_low_state = unitree_hg_msg_dds__LowState_()
@@ -611,11 +634,10 @@ class HGSDKController(HGSDKControllerBase):
         self.dummy_state_thread = threading.Thread(target=self._dummy_state_publisher, daemon=True)
         self.dummy_state_thread.start()
         
-        print("🎭 Lo mode: Start dummy state publisher (100Hz)")
+        print_colored("INFO", "Lo mode: Start dummy state publisher (100Hz)")
     
     def _dummy_state_publisher(self):
         """Dummy state publishing thread"""
-        import time
         
         dt = 1.0 / 100.0  # 100Hz
         while self.dummy_state_running:
@@ -644,7 +666,7 @@ class HGSDKController(HGSDKControllerBase):
      
     def reset_controller(self):
         """Reset controller state"""
-        print("🔄 Reset G1 Controller")
+        print_colored("INFO", "Reset G1 Controller")
         self.controller_running = False
         self.damping_running = True
         
@@ -654,7 +676,7 @@ class HGSDKController(HGSDKControllerBase):
 
 
 if __name__ == "__main__":
-    print("🤖 HG SDK Controller Abstract Base Class")
+    print_colored("INFO", "HG SDK Controller Abstract Base Class")
     print("Usage:")
     print("  1. Inherit from HGSDKController")
     print("  2. Implement update_motor_cmd() method")

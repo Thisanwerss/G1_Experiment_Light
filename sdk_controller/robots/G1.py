@@ -144,11 +144,12 @@ R_IMU_IN_BASE = np.eye(3)
 
 # Control frequency
 CONTROL_FREQ = 100  # 100Hz control frequency
-# Use hg series DDS
-# Only use PD target control, no feedforward torque control
+# Using hg series DDS
+# Only PD target control is used, no feedforward torque control
 # G1 29DOF Version
 # Joint order: left leg(6) + right leg(6) + waist(1) + left arm(7) + right arm(7) = 27 body joints
-# Note: Finger joints are not included here, finger joint control (unitree_hg::msg::dds_::HandCmd_.motor_cmd) is replaced with current position (unitree_hg::msg::dds_::HandState_.motor_state) with high damping in actual control
+# Note: Finger joints are not included here. Finger joint control (unitree_hg::msg::dds_::HandCmd_.motor_cmd) 
+# is replaced with damping around the current position (from unitree_hg::msg::dds_::HandState_.motor_state) in actual control.
 
 
 
@@ -161,7 +162,7 @@ STAND_UP_JOINT_POS = np.array([
             0, 0, 0, 0.0, 0.0, 0,  # right leg
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  # fingers
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0   # fingers
-        ])  # 确保长度匹配
+        ])  
 
 
 # Hand joint gains (assuming from configuration, default to 2.0 if not found)
@@ -194,7 +195,7 @@ MUJOCO_JOINT_NAMES = [
 ]
 
 # DDS motor index mapping (loaded from global configuration)
-# Body joint mapping: MuJoCo index -> DDS index
+# mapping from MuJoCo index to DDS index
 BODY_MUJOCO_TO_DDS = {}
 for joint_name, config in G1_JOINT_CONFIG.items():
     BODY_MUJOCO_TO_DDS[config["mujoco_index"]] = config["dds_index"]
