@@ -334,6 +334,17 @@ class HGSDKController(HGSDKControllerBase):
         # Load global configuration
         self.global_config = load_global_config()
         
+        # --- NEW: Setup for disabled joints ---
+        self.disabled_joint_names = set(self.global_config.get("disabled_joints", []))
+        self.disabled_mj_indices = set()
+        if self.disabled_joint_names:
+            print(f"🦾 Disabling control for joints: {list(self.disabled_joint_names)}")
+            # G1_JOINT_CONFIG is imported from G1.py
+            for joint_name, config in G1_JOINT_CONFIG.items():
+                if joint_name in self.disabled_joint_names:
+                    self.disabled_mj_indices.add(config["mujoco_index"])
+        # --- END NEW ---
+        
         # If Vicon is required but not provided, raise exception
         if self.vicon_required and not simulate:
             print("Vicon is required. Setting up subscribers...")
@@ -443,7 +454,8 @@ class HGSDKController(HGSDKControllerBase):
                 self.damping_motor_cmd()
         
         # Safety check
-        if self.controller_running and pd_targets is not None:
+        # 当有外部PD目标时，总是执行安全检查
+        if pd_targets is not None:
             current_q = self._get_current_body_positions()
             target_q = pd_targets[:NUM_ACTIVE_BODY_JOINTS]
             kp_gains = self._get_current_kp_gains()
@@ -463,12 +475,15 @@ class HGSDKController(HGSDKControllerBase):
         self.cmd.crc = self.crc.Crc(self.cmd)
         self.pub.Write(self.cmd)
         
-        # Send hand control command (soft damping)
-        if not self.lo_mode:  # Only send hand commands in real robot mode
-            self.send_hand_damping_command()
-        else:
-            # Lo mode: send dummy hand command for testing
-            self._send_dummy_hand_command()
+        # --- MODIFIED: Disable hand command sending as per user request ---
+        # The original code sent a soft damping command to the hands.
+        # This is now disabled to ensure no hand commands are sent.
+        # if not self.lo_mode:  # Only send hand commands in real robot mode
+        #     self.send_hand_damping_command()
+        # else:
+        #     # Lo mode: send dummy hand command for testing
+        #     self._send_dummy_hand_command()
+        # --- END MODIFICATION ---
     
     def update_motor_cmd_from_pd_targets(self, pd_targets: np.ndarray):
         """Update motor commands based on external PD targets"""
@@ -488,6 +503,18 @@ class HGSDKController(HGSDKControllerBase):
                 self.cmd.motor_cmd[dds_idx].dq = 0.0  # Target velocity is 0
                 self.cmd.motor_cmd[dds_idx].kd = kd
                 self.cmd.motor_cmd[dds_idx].tau = 0.0  # Don't use feedforward torque
+        
+        # --- NEW: Override commands for disabled joints ---
+        if self.disabled_mj_indices:
+            for mj_idx in self.disabled_mj_indices:
+                if mj_idx in BODY_MUJOCO_TO_DDS:
+                    dds_idx = BODY_MUJOCO_TO_DDS[mj_idx]
+                    self.cmd.motor_cmd[dds_idx].q = 0.0
+                    self.cmd.motor_cmd[dds_idx].kp = 0.0
+                    self.cmd.motor_cmd[dds_idx].dq = 0.0
+                    self.cmd.motor_cmd[dds_idx].kd = 0.0
+                    self.cmd.motor_cmd[dds_idx].tau = 0.0
+        # --- END NEW ---
     
     def _get_joint_gains(self, mj_idx: int) -> tuple:
         """Get PD gains for specified joint from global configuration"""

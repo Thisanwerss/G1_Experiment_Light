@@ -13,15 +13,22 @@ Vicon Publisher using Unitreesdk2py
 
 
 Controller using Unitreesdk2py
+    Extract controller from zmq_dds_bridge.py [DONE]
 
 
-Dummy Controller for real robot
-Main Controlling .json
-disabled joint
-Remove all hand control
-Remove all emoji
-
-test on pruned policy in hydrax (add -lo mode in latest framework)
+Dummy Controller for real robot [DONE]
 
 
+Main Controlling .json [DONE]
+disabled joint [DONE]
+Remove all hand control [DONE]
+Remove all emoji and chinese comment
 
+simple joint test update  [DONE]
+
+update simple_g1_joint_test.py using latest framework  [DONE]
+
+
+code distill and general check
+
+experiment
