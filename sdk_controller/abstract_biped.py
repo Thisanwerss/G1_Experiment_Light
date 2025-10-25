@@ -22,9 +22,9 @@ from sdk_controller.topics import *
 
 # Import basic safety layer
 try:
-    from sdk_controller.safety import SafetyLayer
+    from sdk_controller.safety import SafetyLayer, _load_safety_config
 except:
-    from safety import SafetyLayer
+    from safety import SafetyLayer, _load_safety_config
 
 # HG series specific DDS topics
 HG_TOPIC_LOWCMD = "rt/lowcmd"
@@ -44,38 +44,38 @@ def load_global_config():
 class HGSafetyLayer(SafetyLayer):
     """G1 specific safety layer - inherits from base SafetyLayer, adds torque limiting based on PD gains and position errors"""
     
-    def __init__(self, mj_model, robot_config=None, conservative_safety: bool = False):
+    def __init__(self, mj_model, robot_config=None, safety_profile: str = "default"):
         """
         Initialize G1 safety layer
         
         Args:
             mj_model: MuJoCo model
             robot_config: G1 robot configuration (G1.py module), if None uses G1 default configuration
-            conservative_safety: Whether to use more conservative safety limits
+            safety_profile: The safety profile to use.
         """
-        # Load global configuration
+        # Load global configuration for ignored joints and robot specific configs
         self.global_config = load_global_config()
+        ignored_joints = set(self.global_config.get("safety_ignored_joints", []))
         
-        # Initialize base SafetyLayer, passing the conservative flag
-        super().__init__(mj_model, conservative_safety=conservative_safety, num_active_joints=NUM_ACTIVE_BODY_JOINTS)
+        # Initialize base SafetyLayer, passing the profile and ignored joints
+        super().__init__(mj_model, safety_profile=safety_profile, inactive_joint_names=ignored_joints)
         
         self.robot_config = robot_config
-        self.conservative_safety = conservative_safety
         
-        # Load safety parameters from configuration
-        safety_mode = "conservative_mode" if conservative_safety else "default_mode"
-        safety_config = self.global_config["safety_config"][safety_mode]
+        # Load G1-specific safety parameters from the dedicated config file
+        safety_config = _load_safety_config()
+        profile_config = safety_config[safety_profile]
         
-        if self.conservative_safety:
-            print("============================================================")
-            print("🛡️ Safety layer entered [Conservative Mode] - All safety thresholds are tightened! 🛡️")
-            print("============================================================")
+        if safety_profile == "conservative":
+            print("======================================================================")
+            print("🛡️  G1 Safety Layer running in [Conservative Mode] - thresholds tightened! 🛡️")
+            print("======================================================================")
         
-        self.max_position_error = safety_config["max_position_error"]
-        self.torque_static_scale = safety_config["torque_static_scale"]
-        self.torque_mode_scale = safety_config["torque_mode_scale"]
-        self.joint_limit_static_scale = safety_config["joint_limit_static_scale"]
-        self.joint_limit_mode_scale = safety_config["joint_limit_mode_scale"]
+        self.max_position_error = profile_config["max_position_error_rad"]
+        self.torque_static_scale = profile_config["torque_static_scale"]
+        self.torque_mode_scale = profile_config["torque_mode_scale"]
+        self.joint_limit_static_scale = profile_config["joint_limit_static_scale"]
+        self.joint_limit_mode_scale = profile_config["joint_limit_mode_scale"]
 
         # Re-setup G1 specific torque limits, overriding base class settings
         self._setup_g1_torque_limits()
@@ -108,8 +108,10 @@ class HGSafetyLayer(SafetyLayer):
             if self.mj_model.jnt_limited[id]:
                 dof = int(self.mj_model.joint(id).dofadr)
                 if dof >= base_dofs:
-                    relative_joint_id = dof - base_dofs
-                    if relative_joint_id < NUM_ACTIVE_BODY_JOINTS:
+                    # Filter out inactive joints using the name list
+                    joint_name = self.mj_model.joint(id).name
+                    if joint_name not in self.inactive_joint_names:
+                        relative_joint_id = dof - base_dofs
                         min_val = self.mj_model.jnt_range[id][0]
                         max_val = self.mj_model.jnt_range[id][1]
                         limits[relative_joint_id] = (min_val, max_val)
@@ -320,7 +322,7 @@ class HGSDKController(HGSDKControllerBase):
                  vicon_required: bool = True,
                  lo_mode: bool = False,
                  kp_scale_factor: float = 1.0,
-                 conservative_safety: bool = False):
+                 safety_profile: str = "default"):
         
         self.simulate = simulate
         self.robot_config = robot_config
@@ -372,7 +374,7 @@ class HGSDKController(HGSDKControllerBase):
         # Safety layer
         # Use configuration from current module, if no robot_config is passed
         config_to_use = robot_config if robot_config is not None else None
-        self.safety = HGSafetyLayer(mj_model, config_to_use, conservative_safety=conservative_safety)
+        self.safety = HGSafetyLayer(mj_model, config_to_use, safety_profile=safety_profile)
         
         # Control state management
         self.controller_running = False

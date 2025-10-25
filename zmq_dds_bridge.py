@@ -203,7 +203,7 @@ class ZMQDDSBridge:
         zmq_ctrl_port: int = 5556,
         control_frequency: float = 50.0,
         kp_scale_factor: float = 1.0,
-        conservative_safety: bool = False
+        safety_profile: str = "default"
     ):
         self.channel = channel
         self.domain_id = domain_id
@@ -211,7 +211,7 @@ class ZMQDDSBridge:
         self.zmq_ctrl_port = zmq_ctrl_port
         self.control_frequency = control_frequency
         self.kp_scale_factor = kp_scale_factor
-        self.conservative_safety = conservative_safety
+        self.safety_profile = safety_profile
         self.control_dt = 1.0 / self.control_frequency
         
         # 状态管理
@@ -269,7 +269,7 @@ class ZMQDDSBridge:
             vicon_required=(self.channel != "lo"),  # lo模式不需要vicon
             lo_mode=(self.channel == "lo"),  # 传递lo模式标志
             kp_scale_factor=self.kp_scale_factor,
-            conservative_safety=self.conservative_safety
+            safety_profile=self.safety_profile
         )
         
         print("✅ CEM控制器设置完成")
@@ -518,9 +518,11 @@ def main():
         help="全局Kp增益缩放因子 (0.0-1.0)"
     )
     parser.add_argument(
-        "--conservative_safety",
-        action="store_true",
-        help="启用保守模式安全层，使用更严格的阈值"
+        "--safety_profile",
+        type=str,
+        default="default",
+        choices=["default", "conservative"],
+        help="选择安全层配置文件 ('default' 或 'conservative')"
     )
     
     args = parser.parse_args()
@@ -536,7 +538,7 @@ def main():
         zmq_ctrl_port=args.zmq_ctrl_port,
         control_frequency=args.frequency,
         kp_scale_factor=args.kp_scale,
-        conservative_safety=args.conservative_safety
+        safety_profile=args.safety_profile
     )
     
     bridge.run()
@@ -545,7 +547,7 @@ def main():
 class CEMSDKController(HGSDKController):
     """CEM控制器 - 通过ZMQ接收外部策略的PD目标，专用于G1机器人"""
     
-    def __init__(self, simulate: bool = False, robot_config=None, xml_path: str = "", vicon_required: bool = True, lo_mode: bool = False, kp_scale_factor: float = 1.0, conservative_safety: bool = False):
+    def __init__(self, simulate: bool = False, robot_config=None, xml_path: str = "", vicon_required: bool = True, lo_mode: bool = False, kp_scale_factor: float = 1.0, safety_profile: str = "default"):
         """
         初始化CEM控制器
         
@@ -556,7 +558,7 @@ class CEMSDKController(HGSDKController):
             vicon_required: 是否需要Vicon定位
             lo_mode: 是否lo模式
             kp_scale_factor: Kp增益缩放因子
-            conservative_safety: 是否启用保守安全模式
+            safety_profile: 安全配置文件名称
         """
         print(f"🤖 初始化CEMSDKController")
         print(f"   仿真模式: {simulate}")
@@ -571,7 +573,7 @@ class CEMSDKController(HGSDKController):
             vicon_required=vicon_required,
             lo_mode=lo_mode,
             kp_scale_factor=kp_scale_factor,
-            conservative_safety=conservative_safety
+            safety_profile=safety_profile
         )
         
         # CEM控制相关状态

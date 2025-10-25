@@ -3,29 +3,38 @@ import mujoco
 from mj_pin.utils import mj_joint_name2act_id, mj_joint_name2dof
 import json
 import os
+from typing import Set
 
-def _load_global_config():
-    """Helper function to load the global configuration."""
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "global_config.json")
+def _load_safety_config():
+    """Helper function to load the safety configuration."""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "safety_config.json")
     try:
         with open(config_path, 'r') as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        print("Warning: global_config.json not found or corrupted. Using default safety values.")
-        return {}
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Error loading safety_config.json: {e}")
 
 class SafetyLayer:
-    def __init__(self, mj_model, conservative_safety: bool = False, num_active_joints: int = None):
+    def __init__(self, mj_model, safety_profile: str = "default", inactive_joint_names: Set[str] = None):
         """
         Safety controller to enforce kinematic and torque limits.
 
         Args:
             mj_model : MuJoCo model with joint and ctrl limits.
-            conservative_safety: Whether to use more conservative safety limits.
-            num_active_joints: The number of active joints to monitor. If None, all actuated joints are monitored.
+            safety_profile: The safety profile to use ('default', 'conservative', etc.).
+            inactive_joint_names: A set of joint names to be ignored by the safety checks.
         """
         self.mj_model = mj_model
-        _global_config = _load_global_config()
+        
+        # Load safety parameters from the dedicated config file
+        _safety_config = _load_safety_config()
+        if safety_profile not in _safety_config:
+            raise ValueError(f"Safety profile '{safety_profile}' not found in safety_config.json")
+        profile_config = _safety_config[safety_profile]
+        
+        print(f"🛡️  Initializing Safety Layer with profile: '{safety_profile}'")
+
+        self.inactive_joint_names = inactive_joint_names or set()
 
         joint_name2act_id = mj_joint_name2act_id(mj_model)
         joint_name2dof = mj_joint_name2dof(mj_model)
@@ -34,16 +43,10 @@ class SafetyLayer:
         self.joint_limits = {}
         self.torque_limits = {}
         
-        if conservative_safety:
-            self.base_orientation_limit = 25 * np.pi / 180. # 25 degrees
-            self.scale_joint_limit = 0.90 # 90% of physical limit
-        else:
-            self.base_orientation_limit = 35 * np.pi / 180.
-            self.scale_joint_limit = 0.95
-
-        # Load torque limit scale from config, ensuring it's between 0 and 1.
-        torque_limit_scale = _global_config.get("torque_limit_scale", 0.8)
-        self.scale_torque_limit = np.clip(torque_limit_scale, 0.0, 1.0)
+        # Set parameters from the loaded safety profile
+        self.base_orientation_limit = profile_config["base_orientation_limit_deg"] * np.pi / 180.
+        self.scale_joint_limit = profile_config["scale_joint_limit"]
+        self.scale_torque_limit = profile_config["scale_torque_limit"]
 
         for id in range(mj_model.njnt):
             dof = int(mj_model.joint(id).dofadr)
@@ -52,7 +55,7 @@ class SafetyLayer:
             act_id = self.joint_dof2act_id[dof]
             
             # --- FIX: Convert from absolute qpos/dof index to relative joint index ---
-            # The safety layer operates on a sliced array of joint positions (size 27),
+            # The safety layer operates on a sliced array of joint positions,
             # not the full qpos array. We need to map the absolute dof index (e.g., 7-33 for G1)
             # to a relative joint index (0-26). The base has 6 DoFs (qvel) or 7 qpos.
             # We assume a floating base, so the first joint dof starts after the base.
@@ -63,8 +66,9 @@ class SafetyLayer:
             else:
                 continue # Skip base DoFs
 
-            # --- NEW FIX: Only consider joints within the active range ---
-            if num_active_joints is not None and relative_joint_id >= num_active_joints:
+            # --- NEW: Filter based on a list of inactive joint names ---
+            joint_name = self.mj_model.joint(id).name
+            if joint_name in self.inactive_joint_names:
                 continue
 
             q_dof = int(mj_model.jnt_qposadr[id])

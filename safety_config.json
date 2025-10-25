@@ -1,0 +1,37 @@
+{
+  "_comment": "Safety layer configuration file. Defines different profiles for robot safety limits.",
+  "default": {
+    "_comment_block": {
+      "group_description": "Default safety profile for normal operation.",
+      "base_orientation_limit_deg": "Maximum allowed base tilt (roll/pitch) in degrees before triggering a safety stop.",
+      "scale_joint_limit": "Multiplier for the physical joint limits from the MuJoCo model. E.g., 0.95 means using 95% of the full range.",
+      "scale_torque_limit": "Multiplier for the actuator's maximum control torque from the MuJoCo model.",
+      "max_position_error_rad": "[G1 Specific] Maximum allowed difference between the current and target joint position in a single step (in radians). Prevents sudden large jumps.",
+      "torque_static_scale": "[G1 Specific] A static scaling factor for torque limits, applied on top of the base limits.",
+      "torque_mode_scale": "[G1 Specific] An additional scaling factor for torque limits that depends on the safety profile.",
+      "joint_limit_static_scale": "[G1 Specific] A static scaling factor for joint position limits.",
+      "joint_limit_mode_scale": "[G1 Specific] An additional scaling factor for joint limits that depends on the safety profile."
+    },
+    "base_orientation_limit_deg": 35.0,
+    "scale_joint_limit": 0.95,
+    "scale_torque_limit": 0.8,
+    "max_position_error_rad": 0.35,
+    "torque_static_scale": 1.0,
+    "torque_mode_scale": 1.0,
+    "joint_limit_static_scale": 1.0,
+    "joint_limit_mode_scale": 1.0
+  },
+  "conservative": {
+    "_comment_block": {
+      "group_description": "Conservative safety profile with tighter limits, suitable for testing or risky maneuvers. Parameters have the same meaning as in the 'default' profile."
+    },
+    "base_orientation_limit_deg": 25.0,
+    "scale_joint_limit": 0.90,
+    "scale_torque_limit": 0.7,
+    "max_position_error_rad": 0.20,
+    "torque_static_scale": 0.9,
+    "torque_mode_scale": 0.8,
+    "joint_limit_static_scale": 0.95,
+    "joint_limit_mode_scale": 0.95
+  }
+}
