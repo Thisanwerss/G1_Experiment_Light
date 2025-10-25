@@ -1,6 +1,18 @@
 import numpy as np
 import mujoco
 from mj_pin.utils import mj_joint_name2act_id, mj_joint_name2dof
+import json
+import os
+
+def _load_global_config():
+    """Helper function to load the global configuration."""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "global_config.json")
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        print("Warning: global_config.json not found or corrupted. Using default safety values.")
+        return {}
 
 class SafetyLayer:
     def __init__(self, mj_model, conservative_safety: bool = False, num_active_joints: int = None):
@@ -13,6 +25,8 @@ class SafetyLayer:
             num_active_joints: The number of active joints to monitor. If None, all actuated joints are monitored.
         """
         self.mj_model = mj_model
+        _global_config = _load_global_config()
+
         joint_name2act_id = mj_joint_name2act_id(mj_model)
         joint_name2dof = mj_joint_name2dof(mj_model)
         self.joint_act_id2dof = {v:joint_name2dof[k] for k, v in joint_name2act_id.items()}
@@ -27,7 +41,9 @@ class SafetyLayer:
             self.base_orientation_limit = 35 * np.pi / 180.
             self.scale_joint_limit = 0.95
 
-        self.scale_torque_limit = 0.9
+        # Load torque limit scale from config, ensuring it's between 0 and 1.
+        torque_limit_scale = _global_config.get("torque_limit_scale", 0.8)
+        self.scale_torque_limit = np.clip(torque_limit_scale, 0.0, 1.0)
 
         for id in range(mj_model.njnt):
             dof = int(mj_model.joint(id).dofadr)

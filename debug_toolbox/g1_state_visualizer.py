@@ -100,7 +100,7 @@ if ROS2_AVAILABLE:
     class ViconSubscriber(Node):
         """通过ROS2订阅Vicon数据，并计算速度"""
         def __init__(self):
-            super().__init__('g1_visualizer_vicon_subscriber')
+            super().__init__('g1_visualizer_vicon_seubscriber')
             self.lock = Lock()
             
             self.p = np.zeros(3)
